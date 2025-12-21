@@ -38,7 +38,7 @@ namespace BG3BackupManager
         private LowLevelKeyboardProc _keyboardProc = null!;
         private IntPtr _hookID = IntPtr.Zero;
 
-        private ComboBox cboPlaythroughs = null!;
+        private Label lblPlaythroughValue = null!;
         private ComboBox cboBackups = null!;
         private Button btnBackup = null!;
         private Button btnRestore = null!;
@@ -389,13 +389,18 @@ namespace BG3BackupManager
                 TextAlign = ContentAlignment.MiddleLeft
             };
 
-            cboPlaythroughs = new ComboBox
+            lblPlaythroughValue = new Label
             {
                 Location = new Point(140, 26),
                 Size = new Size(560, 30),
-                DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = new Font("Segoe UI", 10.5F),
-                FlatStyle = FlatStyle.Flat
+                ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
+                BackColor = isDark ? darkControlBg : Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Padding = new Padding(8, 4, 8, 4),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Text = "Select a character to view saves.",
+                AutoEllipsis = true
             };
 
 
@@ -441,7 +446,7 @@ lblPlaythroughStatus = new Label
             };
 
             grpBackup.Controls.Add(lblPlaythrough);
-            grpBackup.Controls.Add(cboPlaythroughs);
+            grpBackup.Controls.Add(lblPlaythroughValue);
             grpBackup.Controls.Add(lblPlaythroughStatus);
             grpBackup.Controls.Add(btnBackup);
             grpBackup.Controls.Add(lblQuickSave);
@@ -774,7 +779,6 @@ lblBackupStatus = new Label
         {
             // Suspend layout to prevent flicker
             this.SuspendLayout();
-            cboPlaythroughs.BeginUpdate();
             cboBackups.BeginUpdate();
             
             try
@@ -797,9 +801,6 @@ lblBackupStatus = new Label
             
             // Use the updated character for display
             character = updatedCharacter;
-            
-            // Clear current dropdowns
-            cboPlaythroughs.Items.Clear();
             
             // Save current backup selection before clearing
             var previousBackupSelection = cboBackups.SelectedItem?.ToString();
@@ -834,8 +835,7 @@ lblBackupStatus = new Label
                 }
             }
 
-            cboPlaythroughs.Items.Add(displayText);
-            cboPlaythroughs.SelectedIndex = 0;
+            lblPlaythroughValue.Text = displayText;
 
             var charName = !string.IsNullOrEmpty(selectedCharacter.CharacterName)
                 ? selectedCharacter.CharacterName
@@ -906,7 +906,6 @@ lblBackupStatus = new Label
             {
                 // Resume layout to apply all changes at once
                 cboBackups.EndUpdate();
-                cboPlaythroughs.EndUpdate();
                 this.ResumeLayout();
             }
         }
@@ -1349,7 +1348,6 @@ lblBackupStatus = new Label
         private void LoadPlaythroughs()
         {
             playthroughs = new Dictionary<string, PlaythroughInfo>();
-            cboPlaythroughs.Items.Clear();
 
             if (!Directory.Exists(bg3SavePath))
             {
@@ -1410,8 +1408,7 @@ lblBackupStatus = new Label
                 // Load restore tracking
                 LoadRestoreTracking();
 
-                // NOTE: Dropdown population is now handled by LoadCharacterData after character selection
-                // No longer populating cboPlaythroughs here to avoid mixing characters
+                // NOTE: Playthrough display is now handled by LoadCharacterData after character selection.
                 
                 if (playthroughs.Count > 0)
                 {
@@ -1659,20 +1656,7 @@ lblBackupStatus = new Label
                             playthroughInfo.CharacterName = characterName;
                             SaveProfileNames();
                             
-                            // Store the folder name to restore selection after refresh
-                            var folderNameToSelect = playthroughInfo.FolderName;
-                            LoadPlaythroughs(); // Refresh the display
-                            
-                            // Restore selection to the newly named character
-                            for (int i = 0; i < cboPlaythroughs.Items.Count; i++)
-                            {
-                                var itemText = cboPlaythroughs.Items[i]?.ToString() ?? string.Empty;
-                                if (itemText.StartsWith(characterName + " -"))
-                                {
-                                    cboPlaythroughs.SelectedIndex = i;
-                                    break;
-                                }
-                            }
+                            LoadCharacterData(playthroughInfo);
                         }
                         else
                         {
@@ -2539,9 +2523,7 @@ lblBackupStatus = new Label
                     ? quickSaveTimestamp.Value.ToString("M/d/yyyy HH:mm")
                     : quickSaveTimestamp.Value.ToString("M/d/yyyy h:mm tt");
                 
-                cboPlaythroughs.Items.Clear();
-                cboPlaythroughs.Items.Add($"[Quicksave] - {timeStr}");
-                cboPlaythroughs.SelectedIndex = 0;
+                lblPlaythroughValue.Text = $"[Quicksave] - {timeStr}";
             }
         }
 
@@ -3130,8 +3112,8 @@ private void ApplyStatus(Label target, string message, Color color)
             lblBackupStatus.ForeColor = isDark ? Color.FromArgb(180, 180, 180) : Color.FromArgb(96, 96, 96);
             
             // Dropdowns
-            cboPlaythroughs.BackColor = isDark ? darkControlBg : lightControlBg;
-            cboPlaythroughs.ForeColor = isDark ? darkForeground : lightForeground;
+            lblPlaythroughValue.BackColor = isDark ? darkControlBg : lightControlBg;
+            lblPlaythroughValue.ForeColor = isDark ? darkForeground : lightForeground;
             cboBackups.BackColor = isDark ? darkControlBg : lightControlBg;
             cboBackups.ForeColor = isDark ? darkForeground : lightForeground;
             
