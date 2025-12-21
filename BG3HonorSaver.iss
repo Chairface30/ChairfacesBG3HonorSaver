@@ -5,7 +5,7 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "CrunchyFlix Software"
 #define MyAppExeName "CBG3BackupManager.exe"
-#define MyAppURL ""
+#define MyAppURL "https://github.com/Chairface30/ChairfacesBG3HonorSaver"
 
 [Setup]
 ; App identifiers
@@ -99,3 +99,4 @@ begin
     end;
   end;
 end;
+
