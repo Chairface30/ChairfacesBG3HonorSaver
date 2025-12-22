@@ -34,5 +34,12 @@
 		<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 	  </None>
 	</ItemGroup>
-  
+ 
+	<ItemGroup>
+	  <None Include="LICENSE.txt">
+		<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+	  </None>
+	</ItemGroup>
+ 
 </Project>
