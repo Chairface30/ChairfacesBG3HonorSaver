@@ -38,33 +38,54 @@ namespace BG3BackupManager
         private LowLevelKeyboardProc _keyboardProc = null!;
         private IntPtr _hookID = IntPtr.Zero;
 
-        private ComboBox cboPlaythroughs = null!;
+        private ComboBox cboChooseCharacter = null!;
+        private Label lblCurrentSave = null!;
         private ComboBox cboBackups = null!;
         private Button btnBackup = null!;
         private Button btnRestore = null!;
         private Button btnDeleteBackup = null!;
         private Label lblPlaythrough = null!;
         private Label lblBackup = null!;
-        private Label lblPlaythroughStatus = null!;
         private Label lblBackupStatus = null!;
         private LinkLabel lnkDonate = null!;
+        private GroupBox grpChooseCharacter = null!;
         private GroupBox grpBackup = null!;
         private GroupBox grpRestore = null!;
         private Button btnRestoreAfterDeath = null!;
+        private Button btnSettings = null!;
 
         private string bg3SavePath = string.Empty;
         private string backupRootPath = string.Empty;
         private string bg3ProfilePath = string.Empty;
         private Dictionary<string, PlaythroughInfo> playthroughs = new();
         private Dictionary<string, BackupInfo> backups = new();
+
+
+        // ComboBox item wrapper so we don't rely on fragile display-string matching
+        private sealed class BackupComboItem
+        {
+            public BackupInfo Backup { get; }
+            public string Display { get; }
+
+            public BackupComboItem(BackupInfo backup, string display)
+            {
+                Backup = backup;
+                Display = display;
+            }
+
+            public override string ToString() => Display;
+        }
         private FileSystemWatcher? saveWatcher;
         private string lastSelectedProfile = string.Empty;
         private string lastSelectedBackup = string.Empty;
-        private DateTime? quickSaveTimestamp = null;
         private Label lblQuickSave = null!;
+        private Label lblQuickSaveKey = null!;
         private Label lblQuickRestore = null!;
         private PlaythroughInfo? selectedCharacter = null;
-        private Button btnChooseCharacter = null!;
+        
+        // Restoration tracking - per character
+        private DateTime? lastRestorationTimestamp = null;
+        private string? lastRestoredBackupId = null;
 
         // Dark mode colors
         private Color lightBackground = Color.FromArgb(243, 243, 243);
@@ -110,213 +131,20 @@ namespace BG3BackupManager
                         grpBackup.Enabled = true;
                         grpRestore.Enabled = true;
                         LoadCharacterData(savedCharacter);
-                        return; // Skip the selection dialog
+                        return;
                     }
                 }
             }
             catch
             {
-                // Setting doesn't exist yet - will show selection dialog
+                // Setting doesn't exist yet
             }
             
-            // No saved character or it no longer exists - show selection dialog
-            // Hide the main form until character is selected
-            this.Opacity = 0;
-            this.ShowInTaskbar = false;
-            
-            // Show startup character selection
-            if (!ShowStartupCharacterSelection())
+            // No saved character - auto-select first one from dropdown if available
+            if (playthroughs.Count > 0 && cboChooseCharacter.Items.Count > 0)
             {
-                // User cancelled or closed - exit the application
-                this.Close();
-                Application.Exit();
-                return;
-            }
-            
-            // Show the main form
-            this.Opacity = 1;
-            this.ShowInTaskbar = true;
-        }
-
-        private bool ShowStartupCharacterSelection()
-        {
-            bool isDark = Properties.Settings.Default.DarkMode;
-            
-            using (var startupDialog = new Form())
-            {
-                startupDialog.Text = "Select Character - Chairface's BG3 Honor Saver";
-                startupDialog.Size = new Size(550, 480);
-                startupDialog.StartPosition = FormStartPosition.CenterScreen;
-                startupDialog.FormBorderStyle = FormBorderStyle.FixedDialog;
-                startupDialog.MaximizeBox = false;
-                startupDialog.MinimizeBox = false;
-                startupDialog.BackColor = isDark ? darkBackground : Color.White;
-                startupDialog.Font = new Font("Segoe UI", 10F);
-                
-                // Try to set the icon
-                try
-                {
-                    var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.ico");
-                    if (File.Exists(iconPath))
-                    {
-                        startupDialog.Icon = new Icon(iconPath);
-                    }
-                }
-                catch { }
-
-                var lblPrompt = new Label
-                {
-                    Text = "Welcome! Select a character to manage backups for:",
-                    Location = new Point(20, 20),
-                    Size = new Size(500, 30),
-                    Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-                    ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32)
-                };
-
-                var listCharacters = new ListBox
-                {
-                    Location = new Point(20, 60),
-                    Size = new Size(500, 280),
-                    Font = new Font("Segoe UI", 11F),
-                    BackColor = isDark ? darkControlBg : Color.White,
-                    ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32)
-                };
-
-                // Populate with available characters
-                var characterMap = new Dictionary<string, PlaythroughInfo>();
-                foreach (var pt in playthroughs.Values.OrderByDescending(p => p.LastModified))
-                {
-                    var displayName = !string.IsNullOrEmpty(pt.CharacterName)
-                        ? pt.CharacterName
-                        : "[Unnamed Character]";
-                    var timeStr = Properties.Settings.Default.Use24HourTime
-                        ? pt.LastModified.ToString("M/d/yyyy HH:mm")
-                        : pt.LastModified.ToString("M/d/yyyy h:mm tt");
-                    var item = $"{displayName} - Last played: {timeStr}";
-                    listCharacters.Items.Add(item);
-                    characterMap[item] = pt;
-                }
-
-                var lblHint = new Label
-                {
-                    Text = "Character names are automatically detected from save files.",
-                    Location = new Point(20, 350),
-                    Size = new Size(500, 25),
-                    Font = new Font("Segoe UI", 9F, FontStyle.Italic),
-                    ForeColor = isDark ? Color.FromArgb(140, 140, 140) : Color.FromArgb(128, 128, 128)
-                };
-
-                var btnSelect = new Button
-                {
-                    Text = "Select Character",
-                    Location = new Point(270, 390),
-                    Size = new Size(150, 40),
-                    BackColor = Color.FromArgb(0, 120, 212),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
-                    Cursor = Cursors.Hand,
-                    Enabled = false
-                };
-                btnSelect.FlatAppearance.BorderSize = 0;
-
-                var btnExit = new Button
-                {
-                    Text = "Exit",
-                    Location = new Point(430, 390),
-                    Size = new Size(90, 40),
-                    BackColor = isDark ? darkControlBg : Color.FromArgb(243, 243, 243),
-                    ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Segoe UI", 10.5F),
-                    Cursor = Cursors.Hand,
-                    DialogResult = DialogResult.Cancel
-                };
-                btnExit.FlatAppearance.BorderSize = 1;
-                btnExit.FlatAppearance.BorderColor = isDark ? darkBorder : Color.FromArgb(200, 200, 200);
-
-                listCharacters.SelectedIndexChanged += (s, ev) =>
-                {
-                    btnSelect.Enabled = listCharacters.SelectedIndex >= 0;
-                };
-
-                listCharacters.DoubleClick += (s, ev) =>
-                {
-                    if (listCharacters.SelectedIndex >= 0)
-                    {
-                        btnSelect.PerformClick();
-                    }
-                };
-
-                PlaythroughInfo? selectedPlaythrough = null;
-
-                btnSelect.Click += (s, ev) =>
-                {
-                    if (listCharacters.SelectedIndex >= 0)
-                    {
-                        var selectedItem = listCharacters.SelectedItem?.ToString();
-                        if (selectedItem != null && characterMap.TryGetValue(selectedItem, out var pt))
-                        {
-                            selectedPlaythrough = pt;
-                            
-                            // If still unnamed after auto-detection, use a default name
-                            if (string.IsNullOrEmpty(pt.CharacterName))
-                            {
-                                pt.CharacterName = "Honor Mode Character";
-                                SaveProfileNames();
-                            }
-                            
-                            startupDialog.DialogResult = DialogResult.OK;
-                            startupDialog.Close();
-                        }
-                    }
-                };
-
-                startupDialog.Controls.Add(lblPrompt);
-                startupDialog.Controls.Add(listCharacters);
-                startupDialog.Controls.Add(lblHint);
-                startupDialog.Controls.Add(btnSelect);
-                startupDialog.Controls.Add(btnExit);
-                startupDialog.CancelButton = btnExit;
-
-                // Select first item by default if available
-                if (listCharacters.Items.Count > 0)
-                {
-                    listCharacters.SelectedIndex = 0;
-                }
-
-                // Hide main window while dialog is open
-                this.Opacity = 0;
-                this.ShowInTaskbar = false;
-                
-                if (startupDialog.ShowDialog() == DialogResult.OK && selectedPlaythrough != null)
-                {
-                    // Restore main window visibility
-                    this.Opacity = 1;
-                    this.ShowInTaskbar = true;
-                    
-                    // Store selected character
-                    selectedCharacter = selectedPlaythrough;
-                    
-                    // Save the selection for next time
-                    Properties.Settings.Default.LastSelectedCharacter = selectedPlaythrough.FolderName;
-                    Properties.Settings.Default.Save();
-                    
-                    // Enable backup and restore groups
-                    grpBackup.Enabled = true;
-                    grpRestore.Enabled = true;
-                    
-                    // Load filtered data for this character
-                    LoadCharacterData(selectedPlaythrough);
-                    
-                    return true;
-                }
-                
-                // Restore main window visibility
-                this.Opacity = 1;
-                this.ShowInTaskbar = true;
-                
-                return false;
+                // The dropdown SelectedIndexChanged event will handle loading the character
+                cboChooseCharacter.SelectedIndex = 0;
             }
         }
 
@@ -341,11 +169,11 @@ namespace BG3BackupManager
             bool isDark = Properties.Settings.Default.DarkMode;
             
             this.Text = "Chairface's Baldurs Gate 3 Honor Saver";
-            this.Size = new Size(750, 475);
+            this.Size = new Size(630, 420);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.Sizable;
-            this.MinimumSize = new Size(750, 475);
-            this.MaximumSize = new Size(750, 475);
+            this.MinimumSize = new Size(630, 420);
+            this.MaximumSize = new Size(630, 420);
             this.BackColor = isDark ? darkBackground : Color.FromArgb(243, 243, 243);
             this.Font = new Font("Segoe UI", 10.5F);
             this.Padding = new Padding(0);
@@ -372,7 +200,7 @@ namespace BG3BackupManager
             {
                 Text = "  Create Heroic Save  ",
                 Location = new Point(15, 15),
-                Size = new Size(715, 150),
+                Size = new Size(715, 110),
                 Font = new Font("Segoe UI", 11.5F, FontStyle.Regular),
                 ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32),
                 FlatStyle = FlatStyle.Flat,
@@ -384,44 +212,31 @@ namespace BG3BackupManager
                 Text = "Heroic Save:",
                 Location = new Point(15, 28),
                 Size = new Size(120, 25),
-                Font = new Font("Segoe UI", 10.5F),
+                Font = new Font("Segoe UI", 12F),
                 ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
                 TextAlign = ContentAlignment.MiddleLeft
             };
 
-            cboPlaythroughs = new ComboBox
+            lblCurrentSave = new Label
             {
                 Location = new Point(140, 26),
-                Size = new Size(560, 30),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 10.5F),
-                FlatStyle = FlatStyle.Flat
+                Size = new Size(560, 28),
+                Font = new Font("Segoe UI", 12F),
+                ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32),
+                BorderStyle = BorderStyle.None,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Text = "No save loaded"
             };
-
-
-// Playthrough Status Bar (under Select Profile)
-lblPlaythroughStatus = new Label
-{
-    Location = new Point(140, 60),
-    Size = new Size(560, 28),
-    BorderStyle = BorderStyle.None,
-    BackColor = Color.White,
-    Text = "✓ Ready",
-    Padding = new Padding(10, 6, 10, 6),
-    Font = new Font("Segoe UI", 9.5F),
-    ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
-    TextAlign = ContentAlignment.MiddleLeft
-};
 
             btnBackup = new Button
             {
                 Text = "Backup",
-                Location = new Point(595, 92),
+                Location = new Point(475, 60),
                 Size = new Size(105, 35),
                 BackColor = Color.FromArgb(16, 137, 62),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
             btnBackup.FlatAppearance.BorderSize = 0;
@@ -430,27 +245,37 @@ lblPlaythroughStatus = new Label
             btnBackup.Click += BtnBackup_Click;
 
             // Quicksave timestamp label
+            lblQuickSaveKey = new Label
+            {
+                Text = "[F5] ",
+                Location = new Point(140, 62),
+                Size = new Size(45, 25),
+                Font = new Font("Segoe UI", 14F),
+                ForeColor = isDark ? Color.FromArgb(100, 200, 100) : Color.FromArgb(16, 137, 62),
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+			
             lblQuickSave = new Label
             {
-                Text = "[F5] Quicksave: None",
-                Location = new Point(15, 100),
+                Text = "Quicksave: None",
+                Location = new Point(175, 65),
                 Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 9F),
+                Font = new Font("Segoe UI", 12F),
                 ForeColor = isDark ? Color.FromArgb(140, 140, 140) : Color.FromArgb(96, 96, 96),
                 TextAlign = ContentAlignment.MiddleLeft
             };
 
             grpBackup.Controls.Add(lblPlaythrough);
-            grpBackup.Controls.Add(cboPlaythroughs);
-            grpBackup.Controls.Add(lblPlaythroughStatus);
+            grpBackup.Controls.Add(lblCurrentSave);
             grpBackup.Controls.Add(btnBackup);
+            grpBackup.Controls.Add(lblQuickSaveKey);
             grpBackup.Controls.Add(lblQuickSave);
 
             // Restore Group - Modern card style (moved up since character group removed)
             grpRestore = new GroupBox
             {
                 Text = "  Restore Heroic Save  ",
-                Location = new Point(15, 180),
+                Location = new Point(15, 130),
                 Size = new Size(715, 150),
                 Font = new Font("Segoe UI", 11.5F, FontStyle.Regular),
                 ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32),
@@ -471,37 +296,37 @@ lblPlaythroughStatus = new Label
             cboBackups = new ComboBox
             {
                 Location = new Point(140, 26),
-                Size = new Size(560, 30),
+                Size = new Size(390, 30),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = new Font("Segoe UI", 10.5F),
                 FlatStyle = FlatStyle.Flat
             };
 
 
-// Backup Status Bar (under Select Backup)
-lblBackupStatus = new Label
-{
-    Location = new Point(140, 60),
-    Size = new Size(560, 28),
-    BorderStyle = BorderStyle.None,
-    BackColor = Color.White,
-    Text = "✓ Ready",
-    Padding = new Padding(10, 6, 10, 6),
-    Font = new Font("Segoe UI", 9.5F),
-    ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
-    TextAlign = ContentAlignment.MiddleLeft
-};
+			// Backup Status Bar (under Select Backup)
+			lblBackupStatus = new Label
+			{
+				Location = new Point(140, 60),
+				Size = new Size(390, 30),
+				BorderStyle = BorderStyle.None,
+				BackColor = Color.White,
+				Text = "✓ Ready",
+				Padding = new Padding(10, 6, 10, 6),
+				Font = new Font("Segoe UI", 9.5F),
+				ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
+				TextAlign = ContentAlignment.MiddleLeft
+			};
             cboBackups.SelectedIndexChanged += CboBackups_SelectedIndexChanged;
 
             btnDeleteBackup = new Button
             {
                 Text = "Delete",
-                Location = new Point(375, 92),
+                Location = new Point(255, 100),
                 Size = new Size(105, 35),
                 BackColor = Color.FromArgb(196, 43, 28),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
             btnDeleteBackup.FlatAppearance.BorderSize = 0;
@@ -512,12 +337,12 @@ lblBackupStatus = new Label
             btnRestore = new Button
             {
                 Text = "Restore",
-                Location = new Point(485, 92),
+                Location = new Point(365, 100),
                 Size = new Size(105, 35),
                 BackColor = Color.FromArgb(0, 120, 212),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
             btnRestore.FlatAppearance.BorderSize = 0;
@@ -527,13 +352,13 @@ lblBackupStatus = new Label
 
             btnRestoreAfterDeath = new Button
             {
-                Text = "☠ After Death",
-                Location = new Point(595, 92),
+                Text = "Restore from\nParty Wipe",
+                Location = new Point(475, 100),
                 Size = new Size(105, 35),
                 BackColor = Color.FromArgb(128, 0, 128),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 8.2F, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
             btnRestoreAfterDeath.FlatAppearance.BorderSize = 0;
@@ -546,7 +371,7 @@ lblBackupStatus = new Label
             {
                 Text = "[F6] Quick-restore: Overwrites current save with quicksave. Back up first!",
                 Location = new Point(15, 100),
-                Size = new Size(355, 40),
+                Size = new Size(225, 40),
                 Font = new Font("Segoe UI", 8.5F),
                 ForeColor = isDark ? Color.FromArgb(180, 140, 140) : Color.FromArgb(160, 80, 80),
                 TextAlign = ContentAlignment.MiddleLeft
@@ -559,49 +384,56 @@ lblBackupStatus = new Label
             grpRestore.Controls.Add(btnDeleteBackup);
             grpRestore.Controls.Add(btnRestoreAfterDeath);
             grpRestore.Controls.Add(lblQuickRestore);
-
-            // Choose Character Button - styled like restore button
-            btnChooseCharacter = new Button
+			
+			
+            grpChooseCharacter = new GroupBox
             {
-                Text = "Choose Character",
-                Location = new Point(15, 345),
-                Size = new Size(160, 38),
-                BackColor = Color.FromArgb(0, 120, 212),
-                ForeColor = Color.White,
+                Text = "  Change Character  ",
+                Location = new Point(15, 285),
+                Size = new Size(350, 70),
+                Font = new Font("Segoe UI", 11.5F, FontStyle.Regular),
+                ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32),
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
-                Cursor = Cursors.Hand,
-                Name = "btnChooseCharacter"
             };
-            btnChooseCharacter.FlatAppearance.BorderSize = 0;
-            btnChooseCharacter.FlatAppearance.MouseOverBackColor = Color.FromArgb(0, 102, 180);
-            btnChooseCharacter.FlatAppearance.MouseDownBackColor = Color.FromArgb(0, 90, 158);
-            btnChooseCharacter.Click += BtnSelectCharacter_Click;
+            // Choose Character Button - styled like restore button
 
+            cboChooseCharacter = new ComboBox
+            {
+                Location = new Point(140, 26),
+                Size = new Size(175, 30),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 10.5F),
+                FlatStyle = FlatStyle.Flat,
+				BackColor = isDark ? darkControlBg : Color.White,
+				ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32),
+
+            };
+            cboChooseCharacter.SelectedIndexChanged += CboChooseCharacter_SelectedIndexChanged;
+						
+            grpChooseCharacter.Controls.Add(cboChooseCharacter);
+			
             // Settings Button (Gear icon) - Bottom right
-            var btnSettings = new Button
+            btnSettings = new Button
             {
                 Text = "⚙️",
-                Location = new Point(685, 345),
-                Size = new Size(45, 38),
-                BackColor = isDark ? darkControlBg : Color.FromArgb(243, 243, 243),
+                Location = new Point(530, 290),
+                Size = new Size(70, 70),
                 ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 16F),
+                Font = new Font("Segoe UI", 32),
                 Cursor = Cursors.Hand,
                 TextAlign = ContentAlignment.MiddleCenter
             };
             btnSettings.FlatAppearance.BorderColor = isDark ? darkBorder : Color.FromArgb(200, 200, 200);
-            btnSettings.FlatAppearance.BorderSize = 1;
-            btnSettings.FlatAppearance.MouseOverBackColor = isDark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(233, 233, 233);
+            btnSettings.FlatAppearance.BorderSize = 0;
             btnSettings.FlatAppearance.MouseDownBackColor = isDark ? Color.FromArgb(75, 75, 75) : Color.FromArgb(223, 223, 223);
             btnSettings.Click += BtnSettings_Click;
 
             // Donation Link - Modern subtle style
             lnkDonate = new LinkLabel
             {
-                Location = new Point(15, 395),
-                Size = new Size(715, 25),
+                Location = new Point(0, 353),
+                Size = new Size(630, 25),
                 Text = "☕ Support development - Buy me a coffee",
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular),
@@ -616,153 +448,9 @@ lblBackupStatus = new Label
             // Add all controls to form
             this.Controls.Add(grpBackup);
             this.Controls.Add(grpRestore);
-            this.Controls.Add(btnChooseCharacter);
+            this.Controls.Add(grpChooseCharacter);			
             this.Controls.Add(btnSettings);
             this.Controls.Add(lnkDonate);
-        }
-
-        private void BtnSelectCharacter_Click(object? sender, EventArgs e)
-        {
-            // Show character selection dialog
-            using (var characterDialog = new Form())
-            {
-                bool isDark = Properties.Settings.Default.DarkMode;
-                
-                characterDialog.Text = "Select Character";
-                characterDialog.Size = new Size(500, 400);
-                characterDialog.StartPosition = FormStartPosition.CenterParent;
-                characterDialog.FormBorderStyle = FormBorderStyle.FixedDialog;
-                characterDialog.MaximizeBox = false;
-                characterDialog.MinimizeBox = false;
-                characterDialog.BackColor = isDark ? darkBackground : Color.White;
-                characterDialog.Font = new Font("Segoe UI", 10F);
-
-                var lblPrompt = new Label
-                {
-                    Text = "Select a character to manage backups for:",
-                    Location = new Point(20, 20),
-                    Size = new Size(450, 30),
-                    Font = new Font("Segoe UI", 11F),
-                    ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32)
-                };
-
-                var listCharacters = new ListBox
-                {
-                    Location = new Point(20, 60),
-                    Size = new Size(450, 250),
-                    Font = new Font("Segoe UI", 11F),
-                    BackColor = isDark ? darkControlBg : Color.White,
-                    ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32)
-                };
-
-                // Populate with available characters
-                LoadPlaythroughs(); // Refresh data
-                foreach (var pt in playthroughs.Values.OrderByDescending(p => p.LastModified))
-                {
-                    var displayName = !string.IsNullOrEmpty(pt.CharacterName)
-                        ? pt.CharacterName
-                        : "[Unnamed Character]";
-                    var item = $"{displayName} ({pt.LastModified.ToString("yyyy-MM-dd HH:mm")})";
-                    listCharacters.Items.Add(item);
-                    listCharacters.Tag = listCharacters.Tag ?? new Dictionary<string, PlaythroughInfo>();
-                    ((Dictionary<string, PlaythroughInfo>)listCharacters.Tag)[item] = pt;
-                }
-
-                var btnSelect = new Button
-                {
-                    Text = "Select",
-                    Location = new Point(260, 320),
-                    Size = new Size(100, 35),
-                    BackColor = Color.FromArgb(0, 120, 212),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Segoe UI", 10.5F, FontStyle.Bold),
-                    Cursor = Cursors.Hand,
-                    Enabled = false
-                };
-                btnSelect.FlatAppearance.BorderSize = 0;
-
-                var btnCancel = new Button
-                {
-                    Text = "Cancel",
-                    Location = new Point(370, 320),
-                    Size = new Size(100, 35),
-                    BackColor = isDark ? darkControlBg : Color.FromArgb(243, 243, 243),
-                    ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Segoe UI", 10.5F),
-                    Cursor = Cursors.Hand,
-                    DialogResult = DialogResult.Cancel
-                };
-                btnCancel.FlatAppearance.BorderSize = 1;
-                btnCancel.FlatAppearance.BorderColor = isDark ? darkBorder : Color.FromArgb(200, 200, 200);
-
-                listCharacters.SelectedIndexChanged += (s, ev) =>
-                {
-                    btnSelect.Enabled = listCharacters.SelectedIndex >= 0;
-                };
-
-                listCharacters.DoubleClick += (s, ev) =>
-                {
-                    if (listCharacters.SelectedIndex >= 0)
-                    {
-                        btnSelect.PerformClick();
-                    }
-                };
-
-                btnSelect.Click += (s, ev) =>
-                {
-                    if (listCharacters.SelectedIndex >= 0)
-                    {
-                        var selectedItem = listCharacters.SelectedItem?.ToString();
-                        if (selectedItem != null && listCharacters.Tag is Dictionary<string, PlaythroughInfo> dict)
-                        {
-                            characterDialog.Tag = dict[selectedItem];
-                            characterDialog.DialogResult = DialogResult.OK;
-                            characterDialog.Close();
-                        }
-                    }
-                };
-
-                characterDialog.Controls.Add(lblPrompt);
-                characterDialog.Controls.Add(listCharacters);
-                characterDialog.Controls.Add(btnSelect);
-                characterDialog.Controls.Add(btnCancel);
-
-                // Hide main window while dialog is open
-                this.Opacity = 0;
-                this.ShowInTaskbar = false;
-                
-                var result = characterDialog.ShowDialog();
-                
-                // Restore main window visibility
-                this.Opacity = 1;
-                this.ShowInTaskbar = true;
-                
-                if (result == DialogResult.OK && characterDialog.Tag is PlaythroughInfo selectedPlaythrough)
-                {
-                    // If still unnamed after auto-detection, use a default name
-                    if (string.IsNullOrEmpty(selectedPlaythrough.CharacterName))
-                    {
-                        selectedPlaythrough.CharacterName = "Honor Mode Character";
-                        SaveProfileNames();
-                    }
-                    
-                    // Store selected character
-                    selectedCharacter = selectedPlaythrough;
-                    
-                    // Save the selection for next time
-                    Properties.Settings.Default.LastSelectedCharacter = selectedPlaythrough.FolderName;
-                    Properties.Settings.Default.Save();
-                    
-                    // Enable backup and restore groups
-                    grpBackup.Enabled = true;
-                    grpRestore.Enabled = true;
-                    
-                    // Load filtered data for this character
-                    LoadCharacterData(selectedPlaythrough);
-                }
-            }
         }
 
         private void BtnSettings_Click(object? sender, EventArgs e)
@@ -774,7 +462,6 @@ lblBackupStatus = new Label
         {
             // Suspend layout to prevent flicker
             this.SuspendLayout();
-            cboPlaythroughs.BeginUpdate();
             cboBackups.BeginUpdate();
             
             try
@@ -788,7 +475,7 @@ lblBackupStatus = new Label
             
             if (updatedCharacter == null)
             {
-                UpdatePlaythroughStatus("Character not found", Color.Red);
+                UpdateBackupStatus("Character not found", Color.Red);
                 return;
             }
             
@@ -798,86 +485,56 @@ lblBackupStatus = new Label
             // Use the updated character for display
             character = updatedCharacter;
             
-            // Clear current dropdowns
-            cboPlaythroughs.Items.Clear();
-            
             // Save current backup selection before clearing
-            var previousBackupSelection = cboBackups.SelectedItem?.ToString();
+            BackupInfo? previouslySelectedBackup = null;
+            if (cboBackups.SelectedItem is BackupComboItem prevItem)
+            {
+                previouslySelectedBackup = prevItem.Backup;
+            }
             cboBackups.Items.Clear();
 
-            // Load only this character's save states
-            var timeStr = Properties.Settings.Default.Use24HourTime
-                ? character.LastModified.ToString("M/d/yyyy HH:mm")
-                : character.LastModified.ToString("M/d/yyyy h:mm tt");
+            // Load restoration tracking for this character
+            LoadRestorationTracking();
 
-            var displayText = "";
-            // Show restored save name only if the file hasn't been modified significantly after the restore
-            // (i.e., no new game save has occurred since the restore)
-            if (!string.IsNullOrEmpty(character.LastRestoredSave) &&
-                character.LastModified <= character.LastRestoreTime.AddMinutes(1))
-            {
-                // Show: "Save Name - Time"
-                displayText = $"{character.LastRestoredSave} - {timeStr}";
-            }
-            else
-            {
-                var matchingBackup = FindMatchingBackup(selectedCharacter);
-                if (matchingBackup != null)
-                {
-                    // Show: "Save Name - Time"
-                    displayText = $"{matchingBackup.SaveName} - {timeStr}";
-                }
-                else
-                {
-                    // Show: "Current Save - Time"
-                    displayText = $"Current Save - {timeStr}";
-                }
-            }
-
-            cboPlaythroughs.Items.Add(displayText);
-            cboPlaythroughs.SelectedIndex = 0;
-
-            var charName = !string.IsNullOrEmpty(selectedCharacter.CharacterName)
-                ? selectedCharacter.CharacterName
-                : "[Unnamed Character]";
-            
-            UpdatePlaythroughStatus($"Showing saves for: {charName}", Color.Green);
+            // Determine what to show in lblCurrentSave
+            UpdateCurrentSaveLabel(character);
 
             // Load only this character's backups
             LoadBackups();
             
-            // Filter backups to only show this character's
+            // Filter backups to only show this character's (excluding quicksaves for the dropdown)
             var characterBackups = backups.Values
                 .Where(b => b.CharacterName.Equals(selectedCharacter.CharacterName, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(b => b.CreatedDate)
+                .Where(b => !b.IsQuicksave) // Don't show quicksaves in backup dropdown
+                .OrderByDescending(b => b.SaveTimestamp)
                 .ToList();
 
             cboBackups.Items.Clear();
             foreach (var backup in characterBackups)
             {
-                var saveName = !string.IsNullOrEmpty(backup.SaveName)
-                    ? backup.SaveName
+                var saveName = !string.IsNullOrEmpty(backup.UserSaveName)
+                    ? backup.UserSaveName
                     : "[Unnamed Save]";
                 
                 // Format backup time with 12/24 hour setting
                 var backupTimeStr = Properties.Settings.Default.Use24HourTime
-                    ? backup.CreatedDate.ToString("M/d/yyyy HH:mm")
-                    : backup.CreatedDate.ToString("M/d/yyyy h:mm tt");
+                    ? backup.SaveTimestamp.ToString("M/d/yyyy HH:mm")
+                    : backup.SaveTimestamp.ToString("M/d/yyyy h:mm tt");
                 
                 // Show: "Save Name - Time"
                 var backupDisplay = $"{saveName} - {backupTimeStr}";
-                cboBackups.Items.Add(backupDisplay);
+                cboBackups.Items.Add(new BackupComboItem(backup, backupDisplay));
             }
 
             if (cboBackups.Items.Count > 0)
             {
-                // Try to restore previous selection
+                // Try to restore previous selection by ID
                 bool selectionRestored = false;
-                if (!string.IsNullOrEmpty(previousBackupSelection))
+                if (previouslySelectedBackup != null)
                 {
                     for (int i = 0; i < cboBackups.Items.Count; i++)
                     {
-                        if (cboBackups.Items[i]?.ToString() == previousBackupSelection)
+                        if (cboBackups.Items[i] is BackupComboItem item && item.Backup.Id == previouslySelectedBackup.Id)
                         {
                             cboBackups.SelectedIndex = i;
                             selectionRestored = true;
@@ -892,11 +549,11 @@ lblBackupStatus = new Label
                     cboBackups.SelectedIndex = 0;
                 }
                 
-                UpdateBackupStatus($"Found {cboBackups.Items.Count} backup(s) for {charName}", Color.Green);
+                UpdateBackupStatus($"Found {cboBackups.Items.Count} backup(s)", Color.Green);
             }
             else
             {
-                UpdateBackupStatus($"No backups found for {charName}", Color.Orange);
+                UpdateBackupStatus("No backups found", Color.Orange);
             }
             
             // Load quicksave info for this character
@@ -906,7 +563,6 @@ lblBackupStatus = new Label
             {
                 // Resume layout to apply all changes at once
                 cboBackups.EndUpdate();
-                cboPlaythroughs.EndUpdate();
                 this.ResumeLayout();
             }
         }
@@ -1058,7 +714,7 @@ lblBackupStatus = new Label
                             pathTooltip.SetToolTip(lblSavePathValue, bg3SavePath);
                             Properties.Settings.Default.BG3SavePath = bg3SavePath;
                             Properties.Settings.Default.Save();
-                            UpdatePlaythroughStatus("BG3 save folder changed", Color.FromArgb(0, 120, 212));
+                            UpdateBackupStatus("BG3 save folder changed", Color.FromArgb(0, 120, 212));
                         }
                     }
                 };
@@ -1349,11 +1005,10 @@ lblBackupStatus = new Label
         private void LoadPlaythroughs()
         {
             playthroughs = new Dictionary<string, PlaythroughInfo>();
-            cboPlaythroughs.Items.Clear();
 
             if (!Directory.Exists(bg3SavePath))
             {
-                UpdatePlaythroughStatus($"BG3 save folder not found: {bg3SavePath}", Color.Red);
+                UpdateBackupStatus($"BG3 save folder not found: {bg3SavePath}", Color.Red);
                 return;
             }
 
@@ -1406,28 +1061,110 @@ lblBackupStatus = new Label
 
                 // Load saved profile names
                 LoadProfileNames();
-                
-                // Load restore tracking
-                LoadRestoreTracking();
 
-                // NOTE: Dropdown population is now handled by LoadCharacterData after character selection
-                // No longer populating cboPlaythroughs here to avoid mixing characters
+                // NOTE: Label population is handled by LoadCharacterData after character selection
+                // NOTE: Restoration tracking is now loaded per-character in LoadCharacterData
                 
                 if (playthroughs.Count > 0)
                 {
-                    UpdatePlaythroughStatus($"Found {playthroughs.Count} Honor Mode playthrough(s). Select a character to continue.", Color.Green);
                 }
                 else
                 {
-                    UpdatePlaythroughStatus("No Honor Mode playthroughs found.", Color.Orange);
+                    UpdateBackupStatus("No Honor Mode playthroughs found.", Color.Orange);
                 }
             }
             catch (Exception ex)
             {
-                UpdatePlaythroughStatus($"Error loading playthroughs: {ex.Message}", Color.Red);
+                UpdateBackupStatus($"Error loading playthroughs: {ex.Message}", Color.Red);
             }
 
+            // Populate the character selection dropdown
+            PopulateCharacterDropdown();
+
             LoadBackups();
+        }
+
+        private bool isPopulatingCharacterDropdown = false;
+
+        private void PopulateCharacterDropdown()
+        {
+            if (cboChooseCharacter == null)
+                return;
+                
+            isPopulatingCharacterDropdown = true;
+            
+            try
+            {
+                cboChooseCharacter.Items.Clear();
+                
+                // Sort by character name, then by last modified
+                var sortedPlaythroughs = playthroughs.Values
+                    .OrderBy(p => string.IsNullOrEmpty(p.CharacterName) ? "zzz" : p.CharacterName)
+                    .ThenByDescending(p => p.LastModified)
+                    .ToList();
+                
+                foreach (var pt in sortedPlaythroughs)
+                {
+                    var displayName = !string.IsNullOrEmpty(pt.CharacterName) 
+                        ? pt.CharacterName 
+                        : "[Unnamed Character]";
+                    cboChooseCharacter.Items.Add(displayName);
+                }
+                
+                // If there's a selected character, select it in the dropdown
+                if (selectedCharacter != null && !string.IsNullOrEmpty(selectedCharacter.CharacterName))
+                {
+                    var index = cboChooseCharacter.Items.IndexOf(selectedCharacter.CharacterName);
+                    if (index >= 0)
+                    {
+                        cboChooseCharacter.SelectedIndex = index;
+                    }
+                }
+                else if (cboChooseCharacter.Items.Count > 0)
+                {
+                    // Select first item if no character selected
+                    cboChooseCharacter.SelectedIndex = 0;
+                }
+            }
+            finally
+            {
+                isPopulatingCharacterDropdown = false;
+            }
+        }
+
+        private void CboChooseCharacter_SelectedIndexChanged(object? sender, EventArgs e)
+        {
+            // Skip if we're populating the dropdown
+            if (isPopulatingCharacterDropdown)
+                return;
+                
+            if (cboChooseCharacter.SelectedIndex < 0)
+                return;
+            
+            var selectedName = cboChooseCharacter.SelectedItem?.ToString();
+            if (string.IsNullOrEmpty(selectedName))
+                return;
+            
+            // Find the playthrough matching this name
+            var selectedPlaythrough = playthroughs.Values
+                .FirstOrDefault(p => p.CharacterName == selectedName || 
+                    (string.IsNullOrEmpty(p.CharacterName) && selectedName == "[Unnamed Character]"));
+            
+            if (selectedPlaythrough != null && selectedPlaythrough != selectedCharacter)
+            {
+                selectedCharacter = selectedPlaythrough;
+                
+                // Save the selection for next time
+                Properties.Settings.Default.LastSelectedCharacter = selectedPlaythrough.FolderName;
+                Properties.Settings.Default.Save();
+                
+                // Enable backup and restore groups
+                grpBackup.Enabled = true;
+                grpRestore.Enabled = true;
+                
+                // Load filtered data for this character
+                LoadCharacterData(selectedPlaythrough);
+            }
         }
 
         private void LoadBackups()
@@ -1442,63 +1179,10 @@ lblBackupStatus = new Label
 
             try
             {
-                var backupFolders = Directory.GetDirectories(backupRootPath)
-                    .Where(d => !Path.GetFileName(d).EndsWith("_quicksave", StringComparison.OrdinalIgnoreCase)) // Exclude quicksaves
-                    .OrderByDescending(d => Directory.GetCreationTime(d))
-                    .ToList();
-
-                foreach (var folder in backupFolders)
-                {
-                    var folderName = Path.GetFileName(folder);
-                    var creationTime = Directory.GetCreationTime(folder);
-                    
-                    // Get the playthrough folder inside the backup
-                    var subFolders = Directory.GetDirectories(folder);
-                    if (subFolders.Length > 0)
-                    {
-                        var playthroughFolderName = Path.GetFileName(subFolders[0]);
-                        var characterName = GetCharacterNameForFolder(playthroughFolderName);
-                        
-                        var backupInfo = new BackupInfo
-                        {
-                            BackupFolderPath = folder,
-                            PlaythroughFolderName = playthroughFolderName,
-                            CharacterName = characterName,
-                            SaveName = string.Empty,
-                            CreatedDate = creationTime
-                        };
-                        
-                        backups[folderName] = backupInfo;
-                    }
-                }
-
-                // Load saved backup names
-                LoadBackupNames();
-
-                // Group backups by character and display
-                var groupedBackups = backups.Values
-                    .GroupBy(b => string.IsNullOrEmpty(b.CharacterName) ? "[Unnamed Character]" : b.CharacterName)
-                    .OrderBy(g => g.Key);
-
-                foreach (var group in groupedBackups)
-                {
-                    // Sort saves within character group by date (most recent first)
-                    var sortedSaves = group.OrderByDescending(b => b.CreatedDate);
-                    
-                    foreach (var backup in sortedSaves)
-                    {
-                        var saveName = !string.IsNullOrEmpty(backup.SaveName) 
-                            ? backup.SaveName 
-                            : "[Unnamed Save]";
-                        var displayText = $"{group.Key} - {saveName}";
-                        cboBackups.Items.Add(displayText);
-                    }
-                }
-
-                if (cboBackups.Items.Count > 0)
-                {
-                    cboBackups.SelectedIndex = 0;
-                }
+                // Load backup data from our data file
+                LoadBackupData();
+                
+                // NOTE: Dropdown population is handled by LoadCharacterData after character selection
             }
             catch (Exception ex)
             {
@@ -1659,19 +1343,13 @@ lblBackupStatus = new Label
                             playthroughInfo.CharacterName = characterName;
                             SaveProfileNames();
                             
-                            // Store the folder name to restore selection after refresh
-                            var folderNameToSelect = playthroughInfo.FolderName;
-                            LoadPlaythroughs(); // Refresh the display
+                            // Refresh the display
+                            LoadPlaythroughs(); 
                             
-                            // Restore selection to the newly named character
-                            for (int i = 0; i < cboPlaythroughs.Items.Count; i++)
+                            // Reload character data to update the label
+                            if (selectedCharacter != null)
                             {
-                                var itemText = cboPlaythroughs.Items[i]?.ToString() ?? string.Empty;
-                                if (itemText.StartsWith(characterName + " -"))
-                                {
-                                    cboPlaythroughs.SelectedIndex = i;
-                                    break;
-                                }
+                                LoadCharacterData(selectedCharacter);
                             }
                         }
                         else
@@ -1730,7 +1408,7 @@ lblBackupStatus = new Label
                 {
                     Text = "Create Heroic Save",
                     DialogResult = DialogResult.None,
-                    Location = new Point(280, 145),
+                    Location = new Point(280, 130),
                     Size = new Size(190, 38),
                     BackColor = Color.FromArgb(16, 137, 62),
                     ForeColor = Color.White,
@@ -1790,7 +1468,7 @@ lblBackupStatus = new Label
                 {
                     Text = "Cancel",
                     DialogResult = DialogResult.Cancel,
-                    Location = new Point(180, 145),
+                    Location = new Point(180, 130),
                     Size = new Size(90, 38),
                     BackColor = Color.FromArgb(243, 243, 243),
                     ForeColor = Color.FromArgb(64, 64, 64),
@@ -1830,13 +1508,14 @@ lblBackupStatus = new Label
                     // Check if a backup with this character name and save name already exists
                     var existingBackup = backups.Values.FirstOrDefault(b => 
                         b.CharacterName.Equals(playthroughInfo.CharacterName, StringComparison.OrdinalIgnoreCase) &&
-                        b.SaveName.Equals(saveName, StringComparison.OrdinalIgnoreCase)
+                        b.UserSaveName.Equals(saveName, StringComparison.OrdinalIgnoreCase) &&
+                        !b.IsQuicksave
                     );
 
                     if (existingBackup != null)
                     {
                         var result = MessageBox.Show(
-                            $"A backup named '{saveName}' already exists for {playthroughInfo.CharacterName}.\n\nCreated: {FormatDateTime(existingBackup.CreatedDate)}\n\nDo you want to overwrite it with this new backup?",
+                            $"A backup named '{saveName}' already exists for {playthroughInfo.CharacterName}.\n\nCreated: {FormatDateTime(existingBackup.SaveTimestamp)}\n\nDo you want to overwrite it with this new backup?",
                             "Duplicate Save Name",
                             MessageBoxButtons.YesNo,
                             MessageBoxIcon.Warning
@@ -1847,16 +1526,13 @@ lblBackupStatus = new Label
                             // Delete the old backup folder
                             try
                             {
-                                if (Directory.Exists(existingBackup.BackupFolderPath))
+                                var oldBackupPath = Path.Combine(backupRootPath, existingBackup.RealFolderName);
+                                if (Directory.Exists(oldBackupPath))
                                 {
-                                    Directory.Delete(existingBackup.BackupFolderPath, true);
+                                    Directory.Delete(oldBackupPath, true);
                                 }
-                                // Remove from dictionary
-                                var oldBackupKey = Path.GetFileName(existingBackup.BackupFolderPath);
-                                if (!string.IsNullOrEmpty(oldBackupKey))
-                                {
-                                    backups.Remove(oldBackupKey);
-                                }
+                                // Remove from dictionary by ID
+                                backups.Remove(existingBackup.Id);
                             }
                             catch (Exception ex)
                             {
@@ -1927,14 +1603,17 @@ lblBackupStatus = new Label
                 // Save backup metadata
                 var backup = new BackupInfo
                 {
-                    BackupFolderPath = backupPath,
-                    PlaythroughFolderName = playthroughInfo.FolderName,
+                    Id = Guid.NewGuid().ToString(),
+                    RealFolderName = backupFolderName,
+                    RealTimestamp = DateTime.Now,
                     CharacterName = playthroughInfo.CharacterName,
-                    SaveName = saveName,
-                    CreatedDate = DateTime.Now
+                    PlaythroughFolderName = playthroughInfo.FolderName,
+                    UserSaveName = saveName,
+                    SaveTimestamp = DateTime.Now,
+                    IsQuicksave = false
                 };
-                backups[backupFolderName] = backup;
-                SaveBackupNames();
+                backups[backup.Id] = backup;
+                SaveBackupData();
 
                 UpdateBackupStatus($"Backup '{saveName}' created for '{playthroughInfo.CharacterName}' successfully!", Color.Green);
                 LoadBackups();
@@ -1961,48 +1640,25 @@ lblBackupStatus = new Label
 
         private void PerformRestore(bool isAfterDeath)
         {
-            if (cboBackups.SelectedIndex == -1)
-            {
-                MessageBox.Show("Please select a backup to restore.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            var selectedText = cboBackups.SelectedItem?.ToString();
-            if (string.IsNullOrEmpty(selectedText))
-            {
-                UpdateBackupStatus("Error: Invalid selection.", Color.Red);
-                return;
-            }
-
-            // Get selected character
             if (selectedCharacter == null)
             {
                 MessageBox.Show("Please select a character first.", "No Character Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            // Find the matching backup (format is now "SaveName - Time")
-            BackupInfo? selectedBackup = null;
-            foreach (var backup in backups.Values)
+            if (cboBackups.SelectedIndex == -1)
             {
-                // Only check backups for this character
-                if (!backup.CharacterName.Equals(selectedCharacter.CharacterName, StringComparison.OrdinalIgnoreCase))
-                    continue;
+                MessageBox.Show("Please select a backup to restore.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-                var saveName = !string.IsNullOrEmpty(backup.SaveName) 
-                    ? backup.SaveName 
-                    : "[Unnamed Save]";
-                
-                var backupTimeStr = Properties.Settings.Default.Use24HourTime
-                    ? backup.CreatedDate.ToString("M/d/yyyy HH:mm")
-                    : backup.CreatedDate.ToString("M/d/yyyy h:mm tt");
-                
-                var backupDisplay = $"{saveName} - {backupTimeStr}";
-                if (backupDisplay == selectedText)
-                {
-                    selectedBackup = backup;
-                    break;
-                }
+            // Resolve the selected backup
+            BackupInfo? selectedBackup = null;
+
+            // Preferred path: the ComboBox item carries the BackupInfo
+            if (cboBackups.SelectedItem is BackupComboItem item)
+            {
+                selectedBackup = item.Backup;
             }
 
             if (selectedBackup == null)
@@ -2011,7 +1667,7 @@ lblBackupStatus = new Label
                 return;
             }
 
-            var backupPath = selectedBackup.BackupFolderPath;
+            var backupPath = Path.Combine(backupRootPath, selectedBackup.RealFolderName);
             var backupSubFolders = Directory.GetDirectories(backupPath);
             
             if (backupSubFolders.Length == 0)
@@ -2025,9 +1681,12 @@ lblBackupStatus = new Label
             var profileDisplayName = !string.IsNullOrEmpty(selectedBackup.CharacterName) 
                 ? selectedBackup.CharacterName 
                 : "[Unnamed Character]";
-            var saveDisplayName = !string.IsNullOrEmpty(selectedBackup.SaveName) 
-                ? selectedBackup.SaveName 
+            var saveDisplayName = !string.IsNullOrEmpty(selectedBackup.UserSaveName) 
+                ? selectedBackup.UserSaveName 
                 : "[Unnamed Save]";
+            
+            // Get current save display text for the confirmation dialog
+            var currentSaveDisplay = lblCurrentSave.Text;
 
             // Only warn if folder actually exists
             bool folderExists = Directory.Exists(targetPath);
@@ -2038,7 +1697,7 @@ lblBackupStatus = new Label
                 bool isDark = Properties.Settings.Default.DarkMode;
                 
                 restoreDialog.Text = isAfterDeath ? "Restore After Death" : "Confirm Restore";
-                restoreDialog.Size = new Size(450, 220);
+				restoreDialog.Size = isAfterDeath ? new Size(450, 260) : new Size(450, 220);
                 restoreDialog.StartPosition = FormStartPosition.CenterParent;
                 restoreDialog.FormBorderStyle = FormBorderStyle.FixedDialog;
                 restoreDialog.MaximizeBox = false;
@@ -2046,26 +1705,28 @@ lblBackupStatus = new Label
                 restoreDialog.BackColor = isDark ? darkBackground : Color.White;
                 restoreDialog.Font = new Font("Segoe UI", 10F);
 
+
                 // Build the message based on context
                 string message;
+                var backupTimeStr = FormatDateTime(selectedBackup.SaveTimestamp);
                 if (isAfterDeath)
                 {
                     message = folderExists
-                        ? $"⚠️ Game will be CLOSED and RELAUNCHED\n\nThis will DELETE and replace:\n{profileDisplayName}\n\nWith backup:\n{saveDisplayName} ({FormatDateTime(selectedBackup.CreatedDate)})"
-                        : $"⚠️ Game will be CLOSED and RELAUNCHED\n\nRestore:\n{profileDisplayName}\n\nFrom backup:\n{saveDisplayName} ({FormatDateTime(selectedBackup.CreatedDate)})";
+                        ? $"⚠️ Game will be CLOSED and RELAUNCHED ⚠️\n\nThis will DELETE and replace:\n{currentSaveDisplay}\n\nWith backup:\n{saveDisplayName} - {backupTimeStr}"
+                        : $"Restore:\n{profileDisplayName}\n\nFrom backup:\n{saveDisplayName} - {backupTimeStr}";
                 }
                 else
                 {
                     message = folderExists
-                        ? $"This will DELETE and replace:\n{profileDisplayName}\n\nWith backup:\n{saveDisplayName} ({FormatDateTime(selectedBackup.CreatedDate)})"
-                        : $"Restore:\n{profileDisplayName}\n\nFrom backup:\n{saveDisplayName} ({FormatDateTime(selectedBackup.CreatedDate)})";
+                        ? $"This will DELETE and replace:\n{currentSaveDisplay}\n\nWith backup:\n{saveDisplayName} - {backupTimeStr}"
+                        : $"Restore:\n{profileDisplayName}\n\nFrom backup:\n{saveDisplayName} - {backupTimeStr}";
                 }
 
                 var lblMessage = new Label
                 {
                     Text = message,
                     Location = new Point(20, 20),
-                    Size = new Size(410, 100),
+                    Size = isAfterDeath ? new Size(410, 140) : new Size(410, 100),
                     Font = new Font("Segoe UI", 10F),
                     ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32)
                 };
@@ -2073,7 +1734,7 @@ lblBackupStatus = new Label
                 var btnYes = new Button
                 {
                     Text = "Restore",
-                    Location = new Point(200, 130),
+                    Location = isAfterDeath ? new Point(200, 165) : new Point(200, 130),
                     Size = new Size(105, 38),
                     BackColor = isAfterDeath ? Color.FromArgb(128, 0, 128) : Color.FromArgb(0, 120, 212),
                     ForeColor = Color.White,
@@ -2087,7 +1748,7 @@ lblBackupStatus = new Label
                 var btnNo = new Button
                 {
                     Text = "Cancel",
-                    Location = new Point(315, 130),
+                    Location = isAfterDeath ? new Point(315, 165) : new Point(315, 130),
                     Size = new Size(105, 38),
                     BackColor = isDark ? darkControlBg : Color.FromArgb(243, 243, 243),
                     ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64),
@@ -2177,7 +1838,7 @@ lblBackupStatus = new Label
                 CopyDirectory(backupSubFolders[0], targetPath);
 
                 // Restore profile8.lsf (honor mode flag file) - CRITICAL
-                var profileBackupPath = Path.Combine(selectedBackup.BackupFolderPath, "profile8.lsf");
+                var profileBackupPath = Path.Combine(backupPath, "profile8.lsf");
                 if (File.Exists(profileBackupPath) && !string.IsNullOrEmpty(bg3ProfilePath))
                 {
                     try
@@ -2246,15 +1907,12 @@ lblBackupStatus = new Label
                     }
                 }
 
-                // Record the restore
-                if (playthroughs.ContainsKey(playthroughFolderName))
-                {
-                    playthroughs[playthroughFolderName].LastRestoredSave = saveDisplayName;
-                    playthroughs[playthroughFolderName].LastRestoreTime = DateTime.Now;
-                    SaveRestoreTracking();
-                }
+                // Record the restore with our new tracking system
+                lastRestorationTimestamp = DateTime.Now;
+                lastRestoredBackupId = selectedBackup.Id;
+                SaveRestorationTracking();
 
-                UpdateBackupStatus($"Restore completed for '{profileDisplayName}' successfully!", Color.Green);
+                UpdateBackupStatus($"Restore completed for '{profileDisplayName}'", Color.Green);
                 
                 // Reload the selected character's data (reuse existing selectedCharacter variable)
                 LoadCharacterData(selectedCharacter);
@@ -2296,7 +1954,7 @@ lblBackupStatus = new Label
                                     WorkingDirectory = steamPath
                                 });
                                 
-                                MessageBox.Show($"Restore completed successfully!\n\nBaldur's Gate 3 is launching.\nThe Honor Mode flag has been restored.", "Success - Game Launching", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                UpdateBackupStatus("Restore complete - BG3 launching...", Color.Green);
                             }
                             else
                             {
@@ -2310,12 +1968,8 @@ lblBackupStatus = new Label
                     }
                     catch (Exception launchEx)
                     {
-                        MessageBox.Show($"Restore completed successfully!\n\nHowever, could not auto-launch game:\n{launchEx.Message}\n\nPlease launch BG3 manually.", "Success - Manual Launch Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show($"Restore completed but could not auto-launch game:\n{launchEx.Message}\n\nPlease launch BG3 manually.", "Launch Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
-                }
-                else
-                {
-                    MessageBox.Show($"Restore completed successfully for {profileDisplayName}!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
             catch (Exception ex)
@@ -2396,7 +2050,11 @@ lblBackupStatus = new Label
                 var quicksaveFolderName = $"{selectedCharacter.FolderName}_quicksave";
                 var quicksavePath = Path.Combine(backupRootPath, quicksaveFolderName);
 
-                // Delete existing quicksave for this character if it exists (silent overwrite)
+                // Find existing quicksave backup for this character
+                var existingQuicksave = backups.Values.FirstOrDefault(b => 
+                    b.IsQuicksave && b.CharacterName.Equals(selectedCharacter.CharacterName, StringComparison.OrdinalIgnoreCase));
+
+                // Delete existing quicksave folder if it exists (silent overwrite)
                 if (Directory.Exists(quicksavePath))
                 {
                     try
@@ -2435,8 +2093,32 @@ lblBackupStatus = new Label
                     }
                 }
 
-                // Update quicksave timestamp
-                quickSaveTimestamp = DateTime.Now;
+                // Update or create quicksave backup entry
+                var now = DateTime.Now;
+                if (existingQuicksave != null)
+                {
+                    // Update existing quicksave entry
+                    existingQuicksave.RealTimestamp = now;
+                    existingQuicksave.SaveTimestamp = now;
+                }
+                else
+                {
+                    // Create new quicksave entry
+                    var quicksaveBackup = new BackupInfo
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        RealFolderName = quicksaveFolderName,
+                        RealTimestamp = now,
+                        CharacterName = selectedCharacter.CharacterName,
+                        PlaythroughFolderName = selectedCharacter.FolderName,
+                        UserSaveName = "[Quicksave]",
+                        SaveTimestamp = now,
+                        IsQuicksave = true
+                    };
+                    backups[quicksaveBackup.Id] = quicksaveBackup;
+                }
+                
+                SaveBackupData();
                 UpdateQuickSaveDisplay();
             }
             catch
@@ -2454,11 +2136,18 @@ lblBackupStatus = new Label
                 return;
             }
 
-            // Build quicksave path
-            var quicksaveFolderName = $"{selectedCharacter.FolderName}_quicksave";
-            var quicksavePath = Path.Combine(backupRootPath, quicksaveFolderName);
+            // Find the quicksave backup for this character
+            var quicksaveBackup = backups.Values.FirstOrDefault(b => 
+                b.IsQuicksave && b.CharacterName.Equals(selectedCharacter.CharacterName, StringComparison.OrdinalIgnoreCase));
 
-            // Check if quicksave exists
+            if (quicksaveBackup == null)
+            {
+                return;
+            }
+
+            var quicksavePath = Path.Combine(backupRootPath, quicksaveBackup.RealFolderName);
+
+            // Check if quicksave folder exists
             if (!Directory.Exists(quicksavePath))
             {
                 return;
@@ -2514,16 +2203,13 @@ lblBackupStatus = new Label
                     }
                 }
 
-                // Record the quick-restore using the existing tracking system
-                if (playthroughs.ContainsKey(selectedCharacter.FolderName))
-                {
-                    playthroughs[selectedCharacter.FolderName].LastRestoredSave = "[Quicksave]";
-                    playthroughs[selectedCharacter.FolderName].LastRestoreTime = DateTime.Now;
-                    SaveRestoreTracking();
-                }
+                // Record the quick-restore using the new tracking system
+                lastRestorationTimestamp = DateTime.Now;
+                lastRestoredBackupId = quicksaveBackup.Id;
+                SaveRestorationTracking();
 
-                // Update the dropdown to show "Quicksave" and the timestamp
-                UpdatePlaythroughDropdownForQuicksave();
+                // Update the label to show "Quicksave" and the timestamp
+                UpdateCurrentSaveLabel(selectedCharacter);
             }
             catch
             {
@@ -2533,71 +2219,46 @@ lblBackupStatus = new Label
 
         private void UpdatePlaythroughDropdownForQuicksave()
         {
-            if (quickSaveTimestamp.HasValue)
-            {
-                var timeStr = Properties.Settings.Default.Use24HourTime
-                    ? quickSaveTimestamp.Value.ToString("M/d/yyyy HH:mm")
-                    : quickSaveTimestamp.Value.ToString("M/d/yyyy h:mm tt");
-                
-                cboPlaythroughs.Items.Clear();
-                cboPlaythroughs.Items.Add($"[Quicksave] - {timeStr}");
-                cboPlaythroughs.SelectedIndex = 0;
-            }
+            // This function is no longer needed - UpdateCurrentSaveLabel handles this
         }
 
         private void UpdateQuickSaveDisplay()
         {
-            if (lblQuickSave == null)
+            if (lblQuickSave == null || selectedCharacter == null)
+            {
+                if (lblQuickSave != null)
+                {
+                    bool isDark = Properties.Settings.Default.DarkMode;
+                    lblQuickSave.Text = "Quicksave: None";
+                    lblQuickSave.ForeColor = isDark ? Color.FromArgb(140, 140, 140) : Color.FromArgb(96, 96, 96);
+                }
                 return;
+            }
 
-            bool isDark = Properties.Settings.Default.DarkMode;
+            bool isDarkMode = Properties.Settings.Default.DarkMode;
 
-            if (quickSaveTimestamp.HasValue)
+            // Find quicksave for this character
+            var quicksaveBackup = backups.Values.FirstOrDefault(b => 
+                b.IsQuicksave && b.CharacterName.Equals(selectedCharacter.CharacterName, StringComparison.OrdinalIgnoreCase));
+
+            if (quicksaveBackup != null)
             {
                 var timeStr = Properties.Settings.Default.Use24HourTime
-                    ? quickSaveTimestamp.Value.ToString("M/d/yyyy HH:mm:ss")
-                    : quickSaveTimestamp.Value.ToString("M/d/yyyy h:mm:ss tt");
-                lblQuickSave.Text = $"[F5] ⚡ Quicksave: {timeStr}";
-                lblQuickSave.ForeColor = isDark ? Color.FromArgb(100, 200, 100) : Color.FromArgb(16, 137, 62);
+                    ? quicksaveBackup.SaveTimestamp.ToString("M/d/yyyy HH:mm:ss")
+                    : quicksaveBackup.SaveTimestamp.ToString("M/d/yyyy h:mm:ss tt");
+                lblQuickSave.Text = $"⚡ Quicksave: {timeStr}";
+                lblQuickSave.ForeColor = isDarkMode ? Color.FromArgb(100, 200, 100) : Color.FromArgb(16, 137, 62);
             }
             else
             {
-                lblQuickSave.Text = "[F5] Quicksave: None";
-                lblQuickSave.ForeColor = isDark ? Color.FromArgb(140, 140, 140) : Color.FromArgb(96, 96, 96);
+                lblQuickSave.Text = "   Quicksave: None";
+                lblQuickSave.ForeColor = isDarkMode ? Color.FromArgb(140, 140, 140) : Color.FromArgb(96, 96, 96);
             }
         }
 
         private void LoadQuickSaveInfo()
         {
-            // Get selected character
-            if (selectedCharacter == null)
-            {
-                quickSaveTimestamp = null;
-                UpdateQuickSaveDisplay();
-                return;
-            }
-
-            // Look for existing quicksave for this character
-            var quicksaveFolderName = $"{selectedCharacter.FolderName}_quicksave";
-            var quicksavePath = Path.Combine(backupRootPath, quicksaveFolderName);
-
-            if (Directory.Exists(quicksavePath))
-            {
-                try
-                {
-                    // Get the folder's last write time as the quicksave timestamp
-                    quickSaveTimestamp = Directory.GetLastWriteTime(quicksavePath);
-                }
-                catch
-                {
-                    quickSaveTimestamp = null;
-                }
-            }
-            else
-            {
-                quickSaveTimestamp = null;
-            }
-
+            // Simply update the quicksave display - the backup system handles the data
             UpdateQuickSaveDisplay();
         }
 
@@ -2661,35 +2322,23 @@ lblBackupStatus = new Label
 
         private void BtnDeleteBackup_Click(object? sender, EventArgs e)
         {
+            if (selectedCharacter == null)
+            {
+                MessageBox.Show("Please select a character first.", "No Character Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             if (cboBackups.SelectedIndex == -1)
             {
                 MessageBox.Show("Please select a backup to delete.", "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            var selectedText = cboBackups.SelectedItem?.ToString();
-            if (string.IsNullOrEmpty(selectedText))
-            {
-                UpdateBackupStatus("Error: Invalid selection.", Color.Red);
-                return;
-            }
-
-            // Find the matching backup (will match the most recent one if duplicates exist)
+            // Get the selected backup from ComboBox
             BackupInfo? selectedBackup = null;
-            foreach (var backup in backups.Values.OrderByDescending(b => b.CreatedDate))
+            if (cboBackups.SelectedItem is BackupComboItem item)
             {
-                var characterName = !string.IsNullOrEmpty(backup.CharacterName) 
-                    ? backup.CharacterName 
-                    : "[Unnamed Character]";
-                var saveName = !string.IsNullOrEmpty(backup.SaveName) 
-                    ? backup.SaveName 
-                    : "[Unnamed Save]";
-                var backupDisplay = $"{characterName} - {saveName}";
-                if (backupDisplay == selectedText)
-                {
-                    selectedBackup = backup;
-                    break;
-                }
+                selectedBackup = item.Backup;
             }
 
             if (selectedBackup == null)
@@ -2698,47 +2347,43 @@ lblBackupStatus = new Label
                 return;
             }
 
-            var profileDisplayName = !string.IsNullOrEmpty(selectedBackup.CharacterName) 
-                ? selectedBackup.CharacterName 
+            var profileDisplayName = !string.IsNullOrEmpty(selectedBackup.CharacterName)
+                ? selectedBackup.CharacterName
                 : "[Unnamed Character]";
-            var saveDisplayName = !string.IsNullOrEmpty(selectedBackup.SaveName) 
-                ? selectedBackup.SaveName 
+            var saveDisplayName = !string.IsNullOrEmpty(selectedBackup.UserSaveName)
+                ? selectedBackup.UserSaveName
                 : "[Unnamed Save]";
 
             var result = MessageBox.Show(
-                $"Are you sure you want to DELETE this backup?\n\nCharacter: {profileDisplayName}\nSave: {saveDisplayName}\nCreated: {FormatDateTime(selectedBackup.CreatedDate)}\n\nThis action cannot be undone!",
+                $"Are you sure you want to DELETE this backup?\n\nCharacter: {profileDisplayName}\nSave: {saveDisplayName}\nCreated: {FormatDateTime(selectedBackup.SaveTimestamp)}\n\nThis action cannot be undone!",
                 "Confirm Delete",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning
             );
 
             if (result != DialogResult.Yes)
-            {
                 return;
-            }
 
             try
             {
-                // Delete the backup folder
-                if (Directory.Exists(selectedBackup.BackupFolderPath))
+                var backupFolderPath = Path.Combine(backupRootPath, selectedBackup.RealFolderName);
+                if (Directory.Exists(backupFolderPath))
                 {
-                    Directory.Delete(selectedBackup.BackupFolderPath, true);
+                    Directory.Delete(backupFolderPath, true);
                 }
 
-                // Remove from dictionary
-                var backupKey = Path.GetFileName(selectedBackup.BackupFolderPath);
-                if (!string.IsNullOrEmpty(backupKey))
-                {
-                    backups.Remove(backupKey);
-                }
+                // Remove from dictionary by ID
+                backups.Remove(selectedBackup.Id);
 
-                // Update backup names file
-                SaveBackupNames();
+                SaveBackupData();
 
                 UpdateBackupStatus($"Backup '{saveDisplayName}' for '{profileDisplayName}' deleted successfully!", Color.Green);
-                LoadBackups();
 
-                MessageBox.Show($"Backup deleted successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // Reload lists and keep UI consistent
+                LoadBackups();
+                LoadCharacterData(selectedCharacter);
+
+                MessageBox.Show("Backup deleted successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -2786,41 +2431,21 @@ lblBackupStatus = new Label
 
             try
             {
-                var selectedText = cboBackups.SelectedItem?.ToString();
-                if (string.IsNullOrEmpty(selectedText))
-                    return;
-
-                // Get selected character
                 if (selectedCharacter == null)
                     return;
 
-                // Find the matching backup (format is now "SaveName - Time")
-                foreach (var backup in backups.Values)
+                // Preferred path: the ComboBox item carries the BackupInfo
+                if (cboBackups.SelectedItem is BackupComboItem item)
                 {
-                    // Only check backups for this character
-                    if (!backup.CharacterName.Equals(selectedCharacter.CharacterName, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    var saveName = !string.IsNullOrEmpty(backup.SaveName) 
-                        ? backup.SaveName 
-                        : "[Unnamed Save]";
-                    
-                    var backupTimeStr = Properties.Settings.Default.Use24HourTime
-                        ? backup.CreatedDate.ToString("M/d/yyyy HH:mm")
-                        : backup.CreatedDate.ToString("M/d/yyyy h:mm tt");
-                    
-                    var backupDisplay = $"{saveName} - {backupTimeStr}";
-                    
-                    if (backupDisplay == selectedText)
+                    var backup = item.Backup;
+                    var backupFolderPath = Path.Combine(backupRootPath, backup.RealFolderName);
+                    if (Directory.Exists(backupFolderPath))
                     {
-                        if (Directory.Exists(backup.BackupFolderPath))
-                        {
-                            var size = GetDirectorySize(backup.BackupFolderPath);
-                            var sizeInMB = size / (1024.0 * 1024.0);
-                            UpdateBackupStatus($"Backup: {FormatDateTime(backup.CreatedDate)} | Size: {sizeInMB:F2} MB", Color.FromArgb(0, 120, 212));
-                        }
-                        break;
+                        var size = GetDirectorySize(backupFolderPath);
+                        var sizeInMB = size / (1024.0 * 1024.0);
+                        UpdateBackupStatus($"Backup: {backup.UserSaveName} ({FormatDateTime(backup.SaveTimestamp)}) | Size: {sizeInMB:F2} MB", Color.FromArgb(0, 120, 212));
                     }
+                    return;
                 }
             }
             catch { }
@@ -2834,10 +2459,6 @@ lblBackupStatus = new Label
         }
 
 
-private void UpdatePlaythroughStatus(string message, Color color)
-{
-    ApplyStatus(lblPlaythroughStatus, message, color);
-}
 
 private void UpdateBackupStatus(string message, Color color)
 {
@@ -2924,20 +2545,19 @@ private void ApplyStatus(Label target, string message, Color color)
             catch { }
         }
 
-        private void SaveBackupNames()
+        private void SaveBackupData()
         {
             try
             {
-                var configPath = Path.Combine(backupRootPath, "backup_names.txt");
+                var configPath = Path.Combine(backupRootPath, "backup_data.txt");
                 using (var writer = new StreamWriter(configPath, false))
                 {
                     foreach (var backup in backups.Values)
                     {
-                        if (!string.IsNullOrEmpty(backup.SaveName))
-                        {
-                            var backupFolderName = Path.GetFileName(backup.BackupFolderPath);
-                            writer.WriteLine($"{backupFolderName}|{backup.CharacterName}|{backup.SaveName}");
-                        }
+                        // Format: Id|RealFolderName|RealTimestamp|CharacterName|PlaythroughFolderName|UserSaveName|SaveTimestamp|IsQuicksave
+                        var realTimestamp = backup.RealTimestamp.ToString("o");
+                        var saveTimestamp = backup.SaveTimestamp.ToString("o");
+                        writer.WriteLine($"{backup.Id}|{backup.RealFolderName}|{realTimestamp}|{backup.CharacterName}|{backup.PlaythroughFolderName}|{backup.UserSaveName}|{saveTimestamp}|{backup.IsQuicksave}");
                     }
                 }
             }
@@ -3032,31 +2652,136 @@ private void ApplyStatus(Label target, string message, Color color)
             }
         }
 
-        private void LoadBackupNames()
+        private void LoadBackupData()
         {
             try
             {
-                var configPath = Path.Combine(backupRootPath, "backup_names.txt");
+                var configPath = Path.Combine(backupRootPath, "backup_data.txt");
                 if (File.Exists(configPath))
                 {
                     var lines = File.ReadAllLines(configPath);
                     foreach (var line in lines)
                     {
                         var parts = line.Split('|');
-                        if (parts.Length == 3)
+                        if (parts.Length >= 8)
                         {
-                            var backup = backups.Values.FirstOrDefault(b => 
-                                Path.GetFileName(b.BackupFolderPath) == parts[0]);
-                            if (backup != null)
+                            var id = parts[0];
+                            var realFolderName = parts[1];
+                            DateTime.TryParse(parts[2], out var realTimestamp);
+                            var characterName = parts[3];
+                            var playthroughFolderName = parts[4];
+                            var userSaveName = parts[5];
+                            DateTime.TryParse(parts[6], out var saveTimestamp);
+                            bool.TryParse(parts[7], out var isQuicksave);
+                            
+                            // Check if folder still exists
+                            var folderPath = Path.Combine(backupRootPath, realFolderName);
+                            if (Directory.Exists(folderPath))
                             {
-                                backup.CharacterName = parts[1];
-                                backup.SaveName = parts[2];
+                                var backup = new BackupInfo
+                                {
+                                    Id = id,
+                                    RealFolderName = realFolderName,
+                                    RealTimestamp = realTimestamp,
+                                    CharacterName = characterName,
+                                    PlaythroughFolderName = playthroughFolderName,
+                                    UserSaveName = userSaveName,
+                                    SaveTimestamp = saveTimestamp,
+                                    IsQuicksave = isQuicksave
+                                };
+                                backups[id] = backup;
                             }
                         }
                     }
                 }
+                
+                // Also scan for any backup folders not in the data file (migration from old system)
+                MigrateOldBackups();
             }
             catch { }
+        }
+        
+        private void MigrateOldBackups()
+        {
+            if (!Directory.Exists(backupRootPath))
+                return;
+                
+            var backupFolders = Directory.GetDirectories(backupRootPath);
+            foreach (var folder in backupFolders)
+            {
+                var folderName = Path.GetFileName(folder);
+                
+                // Skip if already in our system (check by RealFolderName)
+                if (backups.Values.Any(b => b.RealFolderName == folderName))
+                    continue;
+                
+                // Get the playthrough folder inside
+                var subFolders = Directory.GetDirectories(folder);
+                if (subFolders.Length > 0)
+                {
+                    var playthroughFolderName = Path.GetFileName(subFolders[0]);
+                    var characterName = GetCharacterNameForFolder(playthroughFolderName);
+                    var creationTime = Directory.GetCreationTime(folder);
+                    var isQuicksave = folderName.EndsWith("_quicksave", StringComparison.OrdinalIgnoreCase);
+                    
+                    var backup = new BackupInfo
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        RealFolderName = folderName,
+                        RealTimestamp = creationTime,
+                        CharacterName = characterName,
+                        PlaythroughFolderName = playthroughFolderName,
+                        UserSaveName = isQuicksave ? "[Quicksave]" : "Migrated Save",
+                        SaveTimestamp = creationTime,
+                        IsQuicksave = isQuicksave
+                    };
+                    backups[backup.Id] = backup;
+                }
+            }
+            
+            // Check if we need to migrate from old backup_names.txt
+            var oldConfigPath = Path.Combine(backupRootPath, "backup_names.txt");
+            if (File.Exists(oldConfigPath))
+            {
+                try
+                {
+                    var lines = File.ReadAllLines(oldConfigPath);
+                    foreach (var line in lines)
+                    {
+                        var parts = line.Split('|');
+                        if (parts.Length >= 3)
+                        {
+                            var oldFolderName = parts[0];
+                            var charName = parts[1];
+                            var saveName = parts[2];
+                            DateTime savedTimestamp = DateTime.MinValue;
+                            if (parts.Length >= 4)
+                            {
+                                DateTime.TryParse(parts[3], out savedTimestamp);
+                            }
+                            
+                            // Find matching backup by folder name and update it
+                            var matchingBackup = backups.Values.FirstOrDefault(b => b.RealFolderName == oldFolderName);
+                            if (matchingBackup != null)
+                            {
+                                matchingBackup.CharacterName = charName;
+                                matchingBackup.UserSaveName = saveName;
+                                if (savedTimestamp != DateTime.MinValue)
+                                {
+                                    matchingBackup.SaveTimestamp = savedTimestamp;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Rename old file so we don't migrate again
+                    File.Move(oldConfigPath, oldConfigPath + ".migrated");
+                }
+                catch { }
+            }
+            
+            // Save the migrated data
+            SaveBackupData();
         }
 
         private string GetCharacterNameForFolder(string folderName)
@@ -3068,48 +2793,139 @@ private void ApplyStatus(Label target, string message, Color color)
             return string.Empty;
         }
 
-        private void SaveRestoreTracking()
+        private void SaveRestorationTracking()
         {
+            if (selectedCharacter == null)
+                return;
+                
             try
             {
-                var configPath = Path.Combine(backupRootPath, "restore_tracking.txt");
-                using (var writer = new StreamWriter(configPath, false))
-                {
-                    foreach (var pt in playthroughs.Values)
-                    {
-                        if (!string.IsNullOrEmpty(pt.LastRestoredSave))
-                        {
-                            writer.WriteLine($"{pt.FolderName}|{pt.LastRestoredSave}|{pt.LastRestoreTime:yyyy-MM-dd HH:mm:ss}");
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
-        private void LoadRestoreTracking()
-        {
-            try
-            {
-                var configPath = Path.Combine(backupRootPath, "restore_tracking.txt");
+                var configPath = Path.Combine(backupRootPath, "restoration_tracking.txt");
+                
+                // Load existing data
+                var trackingData = new Dictionary<string, (DateTime timestamp, string backupId)>();
                 if (File.Exists(configPath))
                 {
                     var lines = File.ReadAllLines(configPath);
                     foreach (var line in lines)
                     {
                         var parts = line.Split('|');
-                        if (parts.Length == 3 && playthroughs.ContainsKey(parts[0]))
+                        if (parts.Length >= 3)
                         {
-                            playthroughs[parts[0]].LastRestoredSave = parts[1];
-                            if (DateTime.TryParse(parts[2], out DateTime restoreTime))
+                            DateTime.TryParse(parts[1], out var ts);
+                            trackingData[parts[0]] = (ts, parts[2]);
+                        }
+                    }
+                }
+                
+                // Update current character's data
+                if (lastRestorationTimestamp.HasValue && !string.IsNullOrEmpty(lastRestoredBackupId))
+                {
+                    trackingData[selectedCharacter.FolderName] = (lastRestorationTimestamp.Value, lastRestoredBackupId);
+                }
+                
+                // Save all data
+                using (var writer = new StreamWriter(configPath, false))
+                {
+                    foreach (var kvp in trackingData)
+                    {
+                        writer.WriteLine($"{kvp.Key}|{kvp.Value.timestamp:o}|{kvp.Value.backupId}");
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void LoadRestorationTracking()
+        {
+            lastRestorationTimestamp = null;
+            lastRestoredBackupId = null;
+            
+            if (selectedCharacter == null)
+                return;
+                
+            try
+            {
+                var configPath = Path.Combine(backupRootPath, "restoration_tracking.txt");
+                if (File.Exists(configPath))
+                {
+                    var lines = File.ReadAllLines(configPath);
+                    foreach (var line in lines)
+                    {
+                        var parts = line.Split('|');
+                        if (parts.Length >= 3 && parts[0] == selectedCharacter.FolderName)
+                        {
+                            if (DateTime.TryParse(parts[1], out var timestamp))
                             {
-                                playthroughs[parts[0]].LastRestoreTime = restoreTime;
+                                lastRestorationTimestamp = timestamp;
                             }
+                            lastRestoredBackupId = parts[2];
+                            break;
                         }
                     }
                 }
             }
             catch { }
+        }
+        
+        private void UpdateCurrentSaveLabel(PlaythroughInfo character)
+        {
+            var displayText = "Current Save";
+            
+            // Check if we have a restoration and the game file hasn't been modified since
+            if (lastRestorationTimestamp.HasValue && !string.IsNullOrEmpty(lastRestoredBackupId))
+            {
+                // If the game's save file is newer than our restoration timestamp, show "Current Save"
+                if (character.LastModified > lastRestorationTimestamp.Value.AddMinutes(1))
+                {
+                    // Game has saved since restoration - show current save with file timestamp
+                    var timeStr = Properties.Settings.Default.Use24HourTime
+                        ? character.LastModified.ToString("M/d/yyyy HH:mm")
+                        : character.LastModified.ToString("M/d/yyyy h:mm tt");
+                    displayText = $"Current Save - {timeStr}";
+                }
+                else
+                {
+                    // Show the restored backup's name and timestamp
+                    var restoredBackup = backups.Values.FirstOrDefault(b => b.Id == lastRestoredBackupId);
+                    if (restoredBackup != null)
+                    {
+                        var timeStr = Properties.Settings.Default.Use24HourTime
+                            ? restoredBackup.SaveTimestamp.ToString("M/d/yyyy HH:mm")
+                            : restoredBackup.SaveTimestamp.ToString("M/d/yyyy h:mm tt");
+                        displayText = $"{restoredBackup.UserSaveName} - {timeStr}";
+                    }
+                    else
+                    {
+                        // Backup no longer exists, show restoration time
+                        var timeStr = Properties.Settings.Default.Use24HourTime
+                            ? lastRestorationTimestamp.Value.ToString("M/d/yyyy HH:mm")
+                            : lastRestorationTimestamp.Value.ToString("M/d/yyyy h:mm tt");
+                        displayText = $"Restored Save - {timeStr}";
+                    }
+                }
+            }
+            else
+            {
+                // No restoration tracking - check if we can match to a backup
+                var matchingBackup = FindMatchingBackup(character);
+                if (matchingBackup != null)
+                {
+                    var timeStr = Properties.Settings.Default.Use24HourTime
+                        ? matchingBackup.SaveTimestamp.ToString("M/d/yyyy HH:mm")
+                        : matchingBackup.SaveTimestamp.ToString("M/d/yyyy h:mm tt");
+                    displayText = $"{matchingBackup.UserSaveName} - {timeStr}";
+                }
+                else
+                {
+                    var timeStr = Properties.Settings.Default.Use24HourTime
+                        ? character.LastModified.ToString("M/d/yyyy HH:mm")
+                        : character.LastModified.ToString("M/d/yyyy h:mm tt");
+                    displayText = $"Current Save - {timeStr}";
+                }
+            }
+            
+            lblCurrentSave.Text = displayText;
         }
 
         private void ApplyTheme()
@@ -3122,18 +2938,25 @@ private void ApplyStatus(Label target, string message, Color color)
             // Group boxes
             grpBackup.ForeColor = isDark ? darkForeground : lightForeground;
             grpRestore.ForeColor = isDark ? darkForeground : lightForeground;
+            grpChooseCharacter.ForeColor = isDark ? darkForeground : lightForeground;
             
             // Labels
             lblPlaythrough.ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64);
             lblBackup.ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64);
-            lblPlaythroughStatus.ForeColor = isDark ? Color.FromArgb(180, 180, 180) : Color.FromArgb(96, 96, 96);
             lblBackupStatus.ForeColor = isDark ? Color.FromArgb(180, 180, 180) : Color.FromArgb(96, 96, 96);
             
+            // Current save label
+            lblCurrentSave.ForeColor = isDark ? darkForeground : Color.FromArgb(32, 32, 32);
+            
             // Dropdowns
-            cboPlaythroughs.BackColor = isDark ? darkControlBg : lightControlBg;
-            cboPlaythroughs.ForeColor = isDark ? darkForeground : lightForeground;
             cboBackups.BackColor = isDark ? darkControlBg : lightControlBg;
             cboBackups.ForeColor = isDark ? darkForeground : lightForeground;
+            cboChooseCharacter.BackColor = isDark ? darkControlBg : lightControlBg;
+            cboChooseCharacter.ForeColor = isDark ? darkForeground : lightForeground;
+            
+            // Settings button
+            btnSettings.ForeColor = isDark ? darkForeground : Color.FromArgb(64, 64, 64);
+            btnSettings.FlatAppearance.BorderColor = isDark ? darkBorder : Color.FromArgb(200, 200, 200);
             
             // Donation link
             if (lnkDonate != null)
@@ -3214,12 +3037,17 @@ private void ApplyStatus(Label target, string message, Color color)
 
             var currentSaveInfo = new FileInfo(playthrough.MostRecentSave);
 
-            // Look for backup with matching character and timestamp
+            // Look for backup with matching character (excluding quicksaves)
             foreach (var backup in backups.Values.Where(b => 
-                b.CharacterName.Equals(playthrough.CharacterName, StringComparison.OrdinalIgnoreCase)))
+                !b.IsQuicksave && b.CharacterName.Equals(playthrough.CharacterName, StringComparison.OrdinalIgnoreCase)))
             {
+                // Get the backup's folder path
+                var backupFolderPath = Path.Combine(backupRootPath, backup.RealFolderName);
+                if (!Directory.Exists(backupFolderPath))
+                    continue;
+
                 // Get the backup's save folder
-                var backupSaveFolder = Directory.GetDirectories(backup.BackupFolderPath)
+                var backupSaveFolder = Directory.GetDirectories(backupFolderPath)
                     .FirstOrDefault(d => Path.GetFileName(d).EndsWith("__HonourMode", StringComparison.OrdinalIgnoreCase));
 
                 if (backupSaveFolder == null)
@@ -3481,16 +3309,17 @@ private void ApplyStatus(Label target, string message, Color color)
         public string UserDefinedName { get; set; } = string.Empty;
         public string MostRecentSave { get; set; } = string.Empty;
         public DateTime LastModified { get; set; }
-        public string LastRestoredSave { get; set; } = string.Empty;
-        public DateTime LastRestoreTime { get; set; }
     }
 
     public class BackupInfo
     {
-        public string BackupFolderPath { get; set; } = string.Empty;
-        public string PlaythroughFolderName { get; set; } = string.Empty;
-        public string CharacterName { get; set; } = string.Empty;
-        public string SaveName { get; set; } = string.Empty;
-        public DateTime CreatedDate { get; set; }
+        public string Id { get; set; } = string.Empty;              // Unique identifier (GUID)
+        public string RealFolderName { get; set; } = string.Empty;  // Actual folder name on disk
+        public DateTime RealTimestamp { get; set; }                  // Filesystem timestamp
+        public string CharacterName { get; set; } = string.Empty;   // Character this backup belongs to
+        public string PlaythroughFolderName { get; set; } = string.Empty; // The playthrough folder inside backup
+        public string UserSaveName { get; set; } = string.Empty;    // User-provided display name
+        public DateTime SaveTimestamp { get; set; }                  // When backup was created (our timestamp)
+        public bool IsQuicksave { get; set; } = false;              // True if this is a quicksave
     }
 }
