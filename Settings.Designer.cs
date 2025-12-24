@@ -82,5 +82,17 @@ namespace BG3BackupManager.Properties {
                 this["LastSelectedCharacter"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool SteamCloudWarningAcknowledged {
+            get {
+                return ((bool)(this["SteamCloudWarningAcknowledged"]));
+            }
+            set {
+                this["SteamCloudWarningAcknowledged"] = value;
+            }
+        }
     }
 }

@@ -60,40 +60,40 @@ for /f %%A in ('dir /s /b "!PUBLISH_DIR!" ^| find /c /v ""') do set FILE_COUNT=%
 echo Found !FILE_COUNT! files
 echo.
 
-:: Step 2: Build installer with Inno Setup
-echo ════════════════════════════════════════════════════
-echo Step 2: Building Installer with Inno Setup
-echo ════════════════════════════════════════════════════
-echo.
+REM :: Step 2: Build installer with Inno Setup
+REM echo ════════════════════════════════════════════════════
+REM echo Step 2: Building Installer with Inno Setup
+REM echo ════════════════════════════════════════════════════
+REM echo.
 
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" BG3HonorSaver.iss
+REM "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" BG3HonorSaver.iss
 
-if %errorlevel% neq 0 (
-    echo [ERROR] Inno Setup build failed
-    echo.
-    echo Check BG3HonorSaver.iss for errors
-    pause
-    exit /b 1
-)
+REM if %errorlevel% neq 0 (
+    REM echo [ERROR] Inno Setup build failed
+    REM echo.
+    REM echo Check BG3HonorSaver.iss for errors
+    REM pause
+    REM exit /b 1
+REM )
 
-:: Success!
-echo.
-echo ════════════════════════════════════════════════════
-echo   Build Complete!
-echo ════════════════════════════════════════════════════
-echo.
-echo Output: CBG3HonorSaver-Setup.exe
-for %%A in (CBG3HonorSaver-Setup.exe) do (
-    set size=%%~zA
-    set /a size_mb=!size! / 1048576
-    echo Size: !size_mb! MB
-)
-echo.
-echo Features:
-echo   - Desktop shortcut (optional checkbox)
-echo   - Launch after install (optional checkbox)
-echo   - .NET 10 check with download prompt
-echo   - Professional Windows installer
-echo.
-echo.
-pause
+REM :: Success!
+REM echo.
+REM echo ════════════════════════════════════════════════════
+REM echo   Build Complete!
+REM echo ════════════════════════════════════════════════════
+REM echo.
+REM echo Output: CBG3HonorSaver-Setup.exe
+REM for %%A in (CBG3HonorSaver-Setup.exe) do (
+    REM set size=%%~zA
+    REM set /a size_mb=!size! / 1048576
+    REM echo Size: !size_mb! MB
+REM )
+REM echo.
+REM echo Features:
+REM echo   - Desktop shortcut (optional checkbox)
+REM echo   - Launch after install (optional checkbox)
+REM echo   - .NET 10 check with download prompt
+REM echo   - Professional Windows installer
+REM echo.
+REM echo.
+REM pause

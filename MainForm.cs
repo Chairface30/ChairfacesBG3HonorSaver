@@ -18,8 +18,9 @@ namespace BG3BackupManager
         // Windows API for global keyboard hook
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
-        private const int VK_F5 = 0x74;
-        private const int VK_F6 = 0x75;
+        private const int VK_S = 0x53;
+        private const int VK_L = 0x4C;
+        private const int VK_CONTROL = 0x11;
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
@@ -33,6 +34,9 @@ namespace BG3BackupManager
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
 
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
         private LowLevelKeyboardProc _keyboardProc = null!;
@@ -53,6 +57,15 @@ namespace BG3BackupManager
         private GroupBox grpRestore = null!;
         private Button btnRestoreAfterDeath = null!;
         private Button btnSettings = null!;
+        private PictureBox picBackupThumbnail = null!;
+        
+        // Steam Cloud warning panel
+        private Panel pnlSteamCloudWarning = null!;
+        private System.Windows.Forms.Timer steamCloudCheckTimer = null!;
+        
+        // Form width constants
+        private const int NormalFormWidth = 630;
+        private const int ExpandedFormWidth = 945; // 630 * 1.5
 
         private string bg3SavePath = string.Empty;
         private string backupRootPath = string.Empty;
@@ -104,7 +117,7 @@ namespace BG3BackupManager
             LoadPlaythroughs();
             InitializeSaveWatcher();
             
-            // Set up global keyboard hook for F5 quicksave
+            // Set up global keyboard hook for Ctrl+S quicksave / Ctrl+L quick-restore
             _keyboardProc = HookCallback;
             _hookID = SetHook(_keyboardProc);
         }
@@ -112,6 +125,9 @@ namespace BG3BackupManager
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            
+            // Check if user has acknowledged Steam Cloud warning
+            CheckSteamCloudStatus();
             
             // Check if we have a saved last character selection
             try
@@ -153,6 +169,8 @@ namespace BG3BackupManager
             if (disposing)
             {
                 saveWatcher?.Dispose();
+                steamCloudCheckTimer?.Stop();
+                steamCloudCheckTimer?.Dispose();
                 
                 // Unhook global keyboard hook
                 if (_hookID != IntPtr.Zero)
@@ -247,10 +265,10 @@ namespace BG3BackupManager
             // Quicksave timestamp label
             lblQuickSaveKey = new Label
             {
-                Text = "[F5] ",
+                Text = "[Ctrl+S] ",
                 Location = new Point(140, 62),
-                Size = new Size(45, 25),
-                Font = new Font("Segoe UI", 14F),
+                Size = new Size(75, 25),
+                Font = new Font("Segoe UI", 12F),
                 ForeColor = isDark ? Color.FromArgb(100, 200, 100) : Color.FromArgb(16, 137, 62),
                 TextAlign = ContentAlignment.MiddleLeft
             };
@@ -258,9 +276,9 @@ namespace BG3BackupManager
             lblQuickSave = new Label
             {
                 Text = "Quicksave: None",
-                Location = new Point(175, 65),
+                Location = new Point(210, 65),
                 Size = new Size(250, 25),
-                Font = new Font("Segoe UI", 12F),
+                Font = new Font("Segoe UI", 11F),
                 ForeColor = isDark ? Color.FromArgb(140, 140, 140) : Color.FromArgb(96, 96, 96),
                 TextAlign = ContentAlignment.MiddleLeft
             };
@@ -369,9 +387,9 @@ namespace BG3BackupManager
             // Quick-restore label with warning
             lblQuickRestore = new Label
             {
-                Text = "[F6] Quick-restore: Overwrites current save with quicksave. Back up first!",
+                Text = "[Ctrl+L] Quick-restore: Overwrites current save with quicksave. Back up first!",
                 Location = new Point(15, 100),
-                Size = new Size(225, 40),
+                Size = new Size(240, 40),
                 Font = new Font("Segoe UI", 8.5F),
                 ForeColor = isDark ? Color.FromArgb(180, 140, 140) : Color.FromArgb(160, 80, 80),
                 TextAlign = ContentAlignment.MiddleLeft
@@ -445,12 +463,196 @@ namespace BG3BackupManager
             };
             lnkDonate.LinkClicked += LnkDonate_LinkClicked;
 
+            // Backup thumbnail preview (shown when backup selected)
+            picBackupThumbnail = new PictureBox
+            {
+                Location = new Point(NormalFormWidth, 15),
+                Size = new Size(ExpandedFormWidth - NormalFormWidth - 30, 370),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = isDark ? Color.FromArgb(45, 45, 45) : Color.FromArgb(230, 230, 230),
+                BorderStyle = BorderStyle.FixedSingle,
+                Visible = false
+            };
+
             // Add all controls to form
             this.Controls.Add(grpBackup);
             this.Controls.Add(grpRestore);
             this.Controls.Add(grpChooseCharacter);			
             this.Controls.Add(btnSettings);
             this.Controls.Add(lnkDonate);
+            this.Controls.Add(picBackupThumbnail);
+            
+            // Create Steam Cloud warning panel (hidden by default)
+            CreateSteamCloudWarningPanel();
+        }
+        
+        private void CreateSteamCloudWarningPanel()
+        {
+            bool isDark = Properties.Settings.Default.DarkMode;
+            
+            pnlSteamCloudWarning = new Panel
+            {
+                Location = new Point(0, 0),
+                Size = new Size(this.ClientSize.Width, 500),
+                BackColor = isDark ? darkBackground : lightBackground,
+                Visible = false,
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+            };
+            
+            var warningIcon = new Label
+            {
+                Text = "⚠️",
+                Font = new Font("Segoe UI", 48F),
+                Size = new Size(100, 80),
+                Location = new Point((pnlSteamCloudWarning.Width - 100) / 2, 10),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Anchor = AnchorStyles.Top
+            };
+            
+            var lblWarningTitle = new Label
+            {
+                Text = "Steam Cloud Sync is ENABLED",
+                Font = new Font("Segoe UI", 18F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(220, 53, 69), // Red warning color
+                Size = new Size(500, 40),
+                Location = new Point((pnlSteamCloudWarning.Width - 500) / 2, 100),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Anchor = AnchorStyles.Top
+            };
+            
+            var lblWarningMessage = new Label
+            {
+                Text = "Steam Cloud Sync will interfere with save backup and restoration.\n\n" +
+                       "To use this tool, you must disable Steam Cloud for Baldur's Gate 3:\n\n" +
+                       "1. Open Steam and go to your Library\n" +
+                       "2. Right-click on Baldur's Gate 3\n" +
+                       "3. Select 'Properties'\n" +
+                       "4. Go to the 'General' tab\n" +
+                       "5. Uncheck 'Keep game saves in the Steam Cloud'",
+                Font = new Font("Segoe UI", 11F),
+                ForeColor = isDark ? darkForeground : lightForeground,
+                Size = new Size(550, 200),
+                Location = new Point((pnlSteamCloudWarning.Width - 550) / 2, 150),
+                TextAlign = ContentAlignment.TopCenter,
+                Anchor = AnchorStyles.Top
+            };
+            
+            var btnOpenSteam = new Button
+            {
+                Text = "Open Steam",
+                Size = new Size(140, 40),
+                Location = new Point((pnlSteamCloudWarning.Width - 300) / 2, 360),
+                BackColor = Color.FromArgb(0, 120, 212),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Anchor = AnchorStyles.Top
+            };
+            btnOpenSteam.FlatAppearance.BorderSize = 0;
+            btnOpenSteam.Click += (s, e) =>
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "steam://nav/games/details/1086940",
+                        UseShellExecute = true
+                    });
+                }
+                catch { }
+            };
+            
+            var btnAcknowledge = new Button
+            {
+                Text = "I've Disabled It",
+                Size = new Size(140, 40),
+                Location = new Point((pnlSteamCloudWarning.Width + 20) / 2, 360),
+                BackColor = Color.FromArgb(40, 167, 69), // Green
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Anchor = AnchorStyles.Top
+            };
+            btnAcknowledge.FlatAppearance.BorderSize = 0;
+            btnAcknowledge.Click += (s, e) =>
+            {
+                AcknowledgeSteamCloudWarning();
+                CheckSteamCloudStatus();
+            };
+            
+            pnlSteamCloudWarning.Controls.Add(warningIcon);
+            pnlSteamCloudWarning.Controls.Add(lblWarningTitle);
+            pnlSteamCloudWarning.Controls.Add(lblWarningMessage);
+            pnlSteamCloudWarning.Controls.Add(btnOpenSteam);
+            pnlSteamCloudWarning.Controls.Add(btnAcknowledge);
+            
+            this.Controls.Add(pnlSteamCloudWarning);
+            pnlSteamCloudWarning.BringToFront();
+        }
+        
+        private void CheckSteamCloudStatus()
+        {
+            // Check if we need to show the warning (first launch only)
+            if (ShouldShowSteamCloudWarning())
+            {
+                // Resize form to fit warning panel
+                this.Size = new Size(NormalFormWidth, 500);
+                this.MinimumSize = new Size(NormalFormWidth, 500);
+                this.MaximumSize = new Size(NormalFormWidth, 500);
+                
+                pnlSteamCloudWarning.Visible = true;
+                grpBackup.Visible = false;
+                grpRestore.Visible = false;
+                grpChooseCharacter.Visible = false;
+                btnSettings.Visible = false;
+                lnkDonate.Visible = false;
+                picBackupThumbnail.Visible = false;
+            }
+            else
+            {
+                // Normal form size (will be expanded if backup is selected)
+                SetFormWidth(false);
+                
+                pnlSteamCloudWarning.Visible = false;
+                grpBackup.Visible = true;
+                grpRestore.Visible = true;
+                grpChooseCharacter.Visible = true;
+                btnSettings.Visible = true;
+                lnkDonate.Visible = true;
+            }
+        }
+        
+        private void SetFormWidth(bool expanded)
+        {
+            int width = expanded ? ExpandedFormWidth : NormalFormWidth;
+            this.Size = new Size(width, 420);
+            this.MinimumSize = new Size(width, 420);
+            this.MaximumSize = new Size(width, 420);
+        }
+        
+        private bool ShouldShowSteamCloudWarning()
+        {
+            // Show warning only on first launch (one-time disclaimer)
+            try
+            {
+                return !Properties.Settings.Default.SteamCloudWarningAcknowledged;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+        
+        private void AcknowledgeSteamCloudWarning()
+        {
+            try
+            {
+                Properties.Settings.Default.SteamCloudWarningAcknowledged = true;
+                Properties.Settings.Default.Save();
+            }
+            catch { }
         }
 
         private void BtnSettings_Click(object? sender, EventArgs e)
@@ -1981,9 +2183,15 @@ namespace BG3BackupManager
 
         private void MainForm_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.F5)
+            if (e.Control && e.KeyCode == Keys.S)
             {
                 DoQuickSave();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.L)
+            {
+                DoQuickRestore();
                 e.Handled = true;
                 e.SuppressKeyPress = true;
             }
@@ -2001,7 +2209,11 @@ namespace BG3BackupManager
             if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
             {
                 int vkCode = Marshal.ReadInt32(lParam);
-                if (vkCode == VK_F5)
+                
+                // Check if Ctrl is held down
+                bool ctrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                
+                if (ctrlPressed && vkCode == VK_S)
                 {
                     // Must invoke on UI thread since hook runs on a different thread
                     if (InvokeRequired)
@@ -2013,7 +2225,7 @@ namespace BG3BackupManager
                         DoQuickSave();
                     }
                 }
-                else if (vkCode == VK_F6)
+                else if (ctrlPressed && vkCode == VK_L)
                 {
                     // Must invoke on UI thread since hook runs on a different thread
                     if (InvokeRequired)
@@ -2251,7 +2463,7 @@ namespace BG3BackupManager
             }
             else
             {
-                lblQuickSave.Text = "   Quicksave: None";
+                lblQuickSave.Text = "Quicksave: None";
                 lblQuickSave.ForeColor = isDarkMode ? Color.FromArgb(140, 140, 140) : Color.FromArgb(96, 96, 96);
             }
         }
@@ -2444,11 +2656,145 @@ namespace BG3BackupManager
                         var size = GetDirectorySize(backupFolderPath);
                         var sizeInMB = size / (1024.0 * 1024.0);
                         UpdateBackupStatus($"Backup: {backup.UserSaveName} ({FormatDateTime(backup.SaveTimestamp)}) | Size: {sizeInMB:F2} MB", Color.FromArgb(0, 120, 212));
+                        
+                        // Show backup thumbnail
+                        ShowBackupThumbnail(backupFolderPath, backup.PlaythroughFolderName);
                     }
                     return;
                 }
             }
             catch { }
+        }
+        
+        private void ShowBackupThumbnail(string backupFolderPath, string playthroughFolderName)
+        {
+            try
+            {
+                // Look for WebP thumbnail in the backup folder
+                // Path: backupFolderPath\playthroughFolderName\*.WebP
+                var playthroughPath = Path.Combine(backupFolderPath, playthroughFolderName);
+                if (!Directory.Exists(playthroughPath))
+                {
+                    ClearThumbnailImage();
+                    return;
+                }
+                
+                // Find WebP file (usually named like "HonourMode.WebP")
+                var webpFiles = Directory.GetFiles(playthroughPath, "*.WebP", SearchOption.TopDirectoryOnly);
+                if (webpFiles.Length == 0)
+                {
+                    // Try lowercase extension
+                    webpFiles = Directory.GetFiles(playthroughPath, "*.webp", SearchOption.TopDirectoryOnly);
+                }
+                
+                if (webpFiles.Length == 0)
+                {
+                    ClearThumbnailImage();
+                    return;
+                }
+                
+                var thumbnailPath = webpFiles[0];
+                
+                // Dispose of previous image to prevent memory leaks
+                ClearThumbnailImage();
+                
+                // Load WebP image
+                var image = LoadImageFromFile(thumbnailPath);
+                if (image != null)
+                {
+                    picBackupThumbnail.Image = image;
+                    
+                    // Expand form and show thumbnail
+                    SetFormWidth(true);
+                    picBackupThumbnail.Visible = true;
+                }
+            }
+            catch
+            {
+                ClearThumbnailImage();
+            }
+        }
+        
+        private Image? LoadImageFromFile(string filePath)
+        {
+            try
+            {
+                // First try: Load using Image.FromFile which uses GDI+ and Windows codecs
+                // On Windows 10 1809+ with WebP Image Extensions installed, this works
+                try
+                {
+                    // Create a copy in memory to avoid file locking
+                    using (var original = Image.FromFile(filePath))
+                    {
+                        return new Bitmap(original);
+                    }
+                }
+                catch (OutOfMemoryException)
+                {
+                    // GDI+ throws OutOfMemoryException for unsupported formats
+                }
+                
+                // Second try: Read bytes and try MemoryStream
+                try
+                {
+                    var bytes = File.ReadAllBytes(filePath);
+                    using (var ms = new MemoryStream(bytes))
+                    {
+                        using (var original = Image.FromStream(ms))
+                        {
+                            return new Bitmap(original);
+                        }
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    // Image format not supported
+                }
+                
+                // Fallback: Show placeholder with install instructions
+                return CreatePlaceholderImage();
+            }
+            catch
+            {
+                return CreatePlaceholderImage();
+            }
+        }
+        
+        private Image CreatePlaceholderImage()
+        {
+            var placeholder = new Bitmap(285, 370);
+            using (var g = Graphics.FromImage(placeholder))
+            {
+                bool isDark = Properties.Settings.Default.DarkMode;
+                g.Clear(isDark ? Color.FromArgb(45, 45, 45) : Color.FromArgb(230, 230, 230));
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                
+                using (var font = new Font("Segoe UI", 9F))
+                using (var brush = new SolidBrush(isDark ? Color.FromArgb(180, 180, 180) : Color.FromArgb(100, 100, 100)))
+                {
+                    var text = "WebP Preview Unavailable\n\nInstall 'WebP Image Extensions'\nfrom Microsoft Store\nto view thumbnails";
+                    var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                    g.DrawString(text, font, brush, new RectangleF(10, 10, 265, 350), format);
+                }
+            }
+            return placeholder;
+        }
+        
+        private void ClearThumbnailImage()
+        {
+            // Dispose of image but keep form expanded
+            if (picBackupThumbnail.Image != null)
+            {
+                picBackupThumbnail.Image.Dispose();
+                picBackupThumbnail.Image = null;
+            }
+        }
+        
+        private void HideBackupThumbnail()
+        {
+            ClearThumbnailImage();
+            picBackupThumbnail.Visible = false;
+            SetFormWidth(false);
         }
 
         private void SyncProfileToBackup(string characterName)
